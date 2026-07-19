@@ -1,0 +1,32 @@
+# Manually-triggered convenience job for demos and backfills: runs the full DAG once,
+# end-to-end, by chaining the independently-scheduled jobs above via run_job_task. Production
+# freshness comes from each job's own schedule (order_domain_ingest_job.yml / gold_jobs.yml);
+# this job exists so `databricks bundle run -t dev main_pipeline` (see README quickstart) gives a
+# single command to prime a freshly-provisioned environment or re-run everything after a backfill.
+resources:
+  jobs:
+    main_pipeline:
+      name: "[${bundle.target}] main_pipeline (manual/demo)"
+      tasks:
+        - task_key: order_domain_ingest
+          run_job_task:
+            job_id: ${resources.jobs.order_domain_ingest.id}
+
+        - task_key: gold_cart_recovery
+          depends_on:
+            - task_key: order_domain_ingest
+          run_job_task:
+            job_id: ${resources.jobs.gold_cart_recovery.id}
+
+        - task_key: gold_fulfillment_risk
+          depends_on:
+            - task_key: order_domain_ingest
+          run_job_task:
+            job_id: ${resources.jobs.gold_fulfillment_risk.id}
+
+        - task_key: gold_exec_summary_marts
+          depends_on:
+            - task_key: gold_cart_recovery
+            - task_key: gold_fulfillment_risk
+          run_job_task:
+            job_id: ${resources.jobs.gold_exec_summary_marts.id}

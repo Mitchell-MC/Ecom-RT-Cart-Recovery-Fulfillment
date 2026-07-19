@@ -1,0 +1,58 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+
+# Terraform
+**/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+terraform.tfvars
+!terraform.tfvars.example
+override.tf
+override.tf.json
+crash.log
+
+# Databricks
+.databricks/
+databricks.yml.bak
+*.dbc
+
+# Data artifacts (synthetic data is generated, not committed)
+data_generation/output/
+bi/local_preview/output/
+/data/bronze/
+/data/silver/
+/data/gold/
+*.parquet
+*.delta
+_delta_log/
+
+# Secrets / local env
+.env
+.env.*
+!*.env.example
+*.pem
+*.key
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Power BI local cache
+bi/powerbi/*.pbix.bak
+
+docs/demo-script-10min.md
+docs/demo-script-30min.md
+docs/star-talking-points.md

@@ -1,0 +1,95 @@
+name: Promote — dev to staging
+
+# Manual promotion, not automatic on every merge: staging is the pre-prod/demo environment (see
+# docs/project-charter.md environments table), so a human explicitly decides when dev is ready.
+# The actual approval gate lives in the GitHub repo's "staging" Environment protection rules
+# (Settings > Environments > staging > required reviewers) -- `environment: staging` below is
+# what makes that gate apply to this job; there's no equivalent YAML-only mechanism.
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type "promote" to confirm you want to deploy dev''s current state to staging'
+        required: true
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require explicit confirmation
+        if: ${{ github.event.inputs.confirm != 'promote' }}
+        run: |
+          echo "::error::Re-run this workflow with confirm=promote to proceed."
+          exit 1
+
+  terraform-apply-staging:
+    needs: guard
+    runs-on: ubuntu-latest
+    environment: staging # <- approval gate
+    defaults:
+      run:
+        working-directory: infra/terraform/env/staging
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.12.2"
+
+      - run: |
+          terraform init \
+            -backend-config="storage_account_name=stecomtfstate" \
+            -backend-config="container_name=tfstate" \
+            -backend-config="resource_group_name=rg-ecom-tfstate" \
+            -backend-config="key=staging.tfstate"
+        env:
+          ARM_USE_OIDC: "true"
+
+      - run: |
+          terraform apply -auto-approve -input=false \
+            -var="subscription_id=${{ vars.AZURE_SUBSCRIPTION_ID }}" \
+            -var="tenant_id=${{ vars.AZURE_TENANT_ID }}" \
+            -var="databricks_workspace_url=${{ vars.DATABRICKS_HOST }}" \
+            -var="storage_suffix=${{ vars.STORAGE_SUFFIX }}" \
+            -var="github_repo=${{ github.repository }}"
+        env:
+          ARM_USE_OIDC: "true"
+          DATABRICKS_AUTH_TYPE: azure-cli
+
+  bundle-deploy-staging:
+    needs: terraform-apply-staging
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - uses: databricks/setup-cli@main
+      - name: databricks bundle deploy
+        working-directory: orchestration/databricks
+        run: databricks bundle deploy -t staging
+        env:
+          DATABRICKS_HOST: ${{ vars.DATABRICKS_HOST }}
+          DATABRICKS_AUTH_TYPE: azure-cli
+          BUNDLE_VAR_job_cluster_policy_id: ${{ vars.JOB_CLUSTER_POLICY_ID }}
+          BUNDLE_VAR_streaming_cluster_policy_id: ${{ vars.STREAMING_CLUSTER_POLICY_ID }}
+          BUNDLE_VAR_sql_warehouse_id: ${{ vars.SQL_WAREHOUSE_ID }}
+          BUNDLE_VAR_pipeline_service_principal_app_id: ${{ vars.PIPELINE_SERVICE_PRINCIPAL_APP_ID }}
+
+      - name: Record promotion
+        run: |
+          echo "Promoted commit ${{ github.sha }} to staging at $(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            >> "$GITHUB_STEP_SUMMARY"

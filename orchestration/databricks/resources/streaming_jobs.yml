@@ -1,0 +1,58 @@
+# Two independent continuous jobs (bronze -> silver), each its own long-running Structured
+# Streaming query on the `streaming` cluster policy (autotermination disabled -- see
+# infra/terraform/modules/compute). Databricks auto-restarts a continuous job's run if it fails,
+# which is why bronze and silver are separate jobs rather than one restarted-together chain: a
+# silver-side bug shouldn't force bronze ingestion to restart and lose its warm state too.
+resources:
+  jobs:
+    bronze_clickstream_stream:
+      name: "[${bundle.target}] bronze_clickstream_stream"
+      continuous:
+        pause_status: UNPAUSED
+      parameters:
+        - name: env
+          default: ${var.environment}
+        - name: storage_suffix
+          default: ${var.storage_suffix}
+      job_clusters:
+        - job_cluster_key: streaming_cluster
+          new_cluster:
+            spark_version: ${var.spark_version}
+            node_type_id: ${var.node_type_id}
+            num_workers: 1
+            policy_id: ${var.streaming_cluster_policy_id}
+            data_security_mode: SINGLE_USER
+      tasks:
+        - task_key: run
+          job_cluster_key: streaming_cluster
+          spark_python_task:
+            python_file: ../../src/ingestion/streaming/bronze_clickstream_stream.py
+          timeout_seconds: 0 # long-running by design
+          max_retries: 3
+          min_retry_interval_millis: 30000
+
+    silver_clickstream:
+      name: "[${bundle.target}] silver_clickstream"
+      continuous:
+        pause_status: UNPAUSED
+      parameters:
+        - name: env
+          default: ${var.environment}
+        - name: storage_suffix
+          default: ${var.storage_suffix}
+      job_clusters:
+        - job_cluster_key: streaming_cluster
+          new_cluster:
+            spark_version: ${var.spark_version}
+            node_type_id: ${var.node_type_id}
+            num_workers: 1
+            policy_id: ${var.streaming_cluster_policy_id}
+            data_security_mode: SINGLE_USER
+      tasks:
+        - task_key: run
+          job_cluster_key: streaming_cluster
+          spark_python_task:
+            python_file: ../../src/transform/silver/silver_clickstream.py
+          timeout_seconds: 0
+          max_retries: 3
+          min_retry_interval_millis: 30000

@@ -1,0 +1,120 @@
+-- DAX measures for the Ecommerce Signal Platform Power BI model.
+-- Grouped by the headline KPI they support (see docs/metric-glossary.md for the source-of-truth
+-- definitions -- these measures must not diverge from that doc; if they do, the doc wins and
+-- the measure has a bug).
+--
+-- Trailing-window selection (1/7/30 day) is a disconnected "Days" parameter table:
+--   Days = { 1, 7, 30 }   -- What-If parameter, single column "DaysValue"
+-- bound to a slicer on the Exec Summary page; SelectedDays reads its current value.
+
+-- ============================================================================
+-- Recoverable Revenue (headline KPI, snapshot-based trend)
+-- ============================================================================
+
+SelectedDays =
+SELECTEDVALUE ( 'Days'[DaysValue], 7 )
+
+Recoverable Revenue (Trailing N) =
+VAR NDays = [SelectedDays]
+RETURN
+    CALCULATE (
+        SUM ( gold_exec_summary_daily[recoverable_revenue] ),
+        DATESINPERIOD (
+            dim_date[Date],
+            MAX ( dim_date[Date] ),
+            -NDays,
+            DAY
+        )
+    )
+
+Recoverable Revenue (Today, Live) =
+-- Reads the DirectQuery cart_recovery_signal directly for the "as of right now" card, distinct
+-- from the trailing-N trend above which reads the daily-snapshot history table.
+CALCULATE (
+    SUM ( gold_cart_recovery_signal[recoverable_cart_value] ),
+    gold_cart_recovery_signal[priority_score] >= 60
+)
+
+Cart Recovery Rate WoW % =
+VAR ThisWeek = [Recoverable Revenue (Trailing N)]
+VAR LastWeek =
+    CALCULATE (
+        [Recoverable Revenue (Trailing N)],
+        DATEADD ( dim_date[Date], -7, DAY )
+    )
+RETURN
+    DIVIDE ( ThisWeek - LastWeek, LastWeek )
+
+-- ============================================================================
+-- Delayed-Order Revenue Risk (headline KPI)
+-- ============================================================================
+
+Delayed-Order Revenue Risk (Live) =
+CALCULATE (
+    SUM ( gold_fulfillment_risk_signal[order_total_usd] ),
+    gold_fulfillment_risk_signal[fulfillment_risk_score] >= 60
+)
+
+At-Risk Order Count =
+CALCULATE (
+    COUNTROWS ( gold_fulfillment_risk_signal ),
+    gold_fulfillment_risk_signal[fulfillment_risk_score] >= 60
+)
+
+Delayed-Order Revenue Risk (Trailing N) =
+VAR NDays = [SelectedDays]
+RETURN
+    CALCULATE (
+        SUM ( gold_exec_summary_daily[delayed_order_revenue_risk] ),
+        DATESINPERIOD ( dim_date[Date], MAX ( dim_date[Date] ), -NDays, DAY )
+    )
+
+-- ============================================================================
+-- On-Time Delivery Rate
+-- ============================================================================
+
+On-Time Delivery Rate =
+AVERAGE ( gold_exec_summary_daily[on_time_delivery_rate] )
+
+On-Time Delivery Rate % (formatted) =
+FORMAT ( [On-Time Delivery Rate], "0.0%" )
+
+On-Time Delivery Rate Trend =
+CALCULATE (
+    [On-Time Delivery Rate],
+    DATESINPERIOD ( dim_date[Date], MAX ( dim_date[Date] ), -[SelectedDays], DAY )
+)
+
+-- ============================================================================
+-- Conversion Lag
+-- ============================================================================
+
+Median Conversion Lag (Minutes) =
+AVERAGE ( gold_exec_summary_daily[conversion_lag_median_minutes] )
+-- Note: this averages the daily *medians* (a median-of-medians approximation), not a true
+-- median across all raw sessions -- gold.exec_summary_daily only stores one pre-aggregated
+-- median per day (see src/transform/gold/gold_exec_summary_marts.py), so the true per-session
+-- distribution isn't available at the BI layer. Acceptable for a trend indicator; call this out
+-- if a stakeholder wants the exact trailing-N median, not an average of daily medians.
+
+-- ============================================================================
+-- Priority/risk bucketing (used for conditional formatting + table sorts on the ops pages)
+-- ============================================================================
+
+Cart Priority Tier =
+SWITCH (
+    TRUE (),
+    SELECTEDVALUE ( gold_cart_recovery_signal[priority_score] ) >= 80, "🔴 Act now",
+    SELECTEDVALUE ( gold_cart_recovery_signal[priority_score] ) >= 60, "🟠 Today",
+    SELECTEDVALUE ( gold_cart_recovery_signal[priority_score] ) >= 40, "🟡 Monitor",
+    "⚪ Low"
+)
+
+Fulfillment Risk Tier =
+SWITCH (
+    TRUE (),
+    SELECTEDVALUE ( gold_fulfillment_risk_signal[fulfillment_risk_score] ) >= 80, "🔴 Escalate",
+    SELECTEDVALUE ( gold_fulfillment_risk_signal[fulfillment_risk_score] ) >= 60, "🟠 Watch",
+    SELECTEDVALUE ( gold_fulfillment_risk_signal[fulfillment_risk_score] ) >= 40, "🟡 Monitor",
+    "⚪ Low"
+)

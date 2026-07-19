@@ -1,0 +1,90 @@
+# Three gold jobs, each on its own cadence per the freshness SLA table in
+# docs/project-charter.md -- deliberately NOT bundled into one job, since forcing
+# gold_exec_summary_marts (daily) onto gold_cart_recovery's schedule (hourly) would mean either
+# recomputing the daily rollup 24x more often than needed or under-refreshing the hourly signal.
+resources:
+  jobs:
+    gold_cart_recovery:
+      name: "[${bundle.target}] gold_cart_recovery"
+      schedule:
+        quartz_cron_expression: "0 0 * * * ?" # hourly, on the hour
+        timezone_id: UTC
+      parameters:
+        - name: env
+          default: ${var.environment}
+        - name: storage_suffix
+          default: ${var.storage_suffix}
+      job_clusters:
+        - job_cluster_key: gold_cluster
+          new_cluster:
+            spark_version: ${var.spark_version}
+            node_type_id: ${var.node_type_id}
+            num_workers: 2
+            policy_id: ${var.job_cluster_policy_id}
+            data_security_mode: SINGLE_USER
+      tasks:
+        - task_key: run
+          job_cluster_key: gold_cluster
+          spark_python_task:
+            python_file: ../../src/transform/gold/gold_cart_recovery.py
+          timeout_seconds: 900
+          max_retries: 2
+          min_retry_interval_millis: 60000
+
+    gold_fulfillment_risk:
+      name: "[${bundle.target}] gold_fulfillment_risk"
+      schedule:
+        quartz_cron_expression: "0 0 */4 * * ?" # every 4 hours
+        timezone_id: UTC
+      parameters:
+        - name: env
+          default: ${var.environment}
+        - name: storage_suffix
+          default: ${var.storage_suffix}
+      job_clusters:
+        - job_cluster_key: gold_cluster
+          new_cluster:
+            spark_version: ${var.spark_version}
+            node_type_id: ${var.node_type_id}
+            num_workers: 2
+            policy_id: ${var.job_cluster_policy_id}
+            data_security_mode: SINGLE_USER
+      tasks:
+        - task_key: run
+          job_cluster_key: gold_cluster
+          spark_python_task:
+            python_file: ../../src/transform/gold/gold_fulfillment_risk.py
+          timeout_seconds: 900
+          max_retries: 2
+          min_retry_interval_millis: 60000
+
+    gold_exec_summary_marts:
+      name: "[${bundle.target}] gold_exec_summary_marts"
+      schedule:
+        quartz_cron_expression: "0 0 6 * * ?" # daily, 06:00 UTC
+        timezone_id: UTC
+      parameters:
+        - name: env
+          default: ${var.environment}
+        - name: storage_suffix
+          default: ${var.storage_suffix}
+      job_clusters:
+        - job_cluster_key: gold_cluster
+          new_cluster:
+            spark_version: ${var.spark_version}
+            node_type_id: ${var.node_type_id}
+            num_workers: 1
+            policy_id: ${var.job_cluster_policy_id}
+            data_security_mode: SINGLE_USER
+      tasks:
+        - task_key: run
+          job_cluster_key: gold_cluster
+          spark_python_task:
+            python_file: ../../src/transform/gold/gold_exec_summary_marts.py
+          # Depends on gold_cart_recovery/gold_fulfillment_risk having already produced today's
+          # snapshot; the 06:00 slot is chosen to land after at least one run of each (hourly /
+          # every-4h) rather than expressed as a hard cross-job dependency, to avoid coupling
+          # three differently-cadenced jobs together -- see docs/architecture.md.
+          timeout_seconds: 600
+          max_retries: 2
+          min_retry_interval_millis: 60000

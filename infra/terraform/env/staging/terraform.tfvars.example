@@ -1,0 +1,7 @@
+subscription_id          = "00000000-0000-0000-0000-000000000000"
+tenant_id                = "00000000-0000-0000-0000-000000000000"
+databricks_workspace_url = "https://adb-1111111111111111.0.azuredatabricks.net"
+location                 = "eastus2"
+storage_suffix           = "sg01"
+github_repo              = "your-org/ecom-signal-platform"
+reader_groups             = ["data-analysts", "exec-sponsors"]

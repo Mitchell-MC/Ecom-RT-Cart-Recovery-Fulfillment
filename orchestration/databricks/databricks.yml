@@ -1,0 +1,58 @@
+# Databricks Asset Bundle root. Deploys job/pipeline *definitions* -- the platform (catalog,
+# storage, cluster policies, identity) is Terraform's job, not this file's; see
+# infra/terraform/README.md for why that split exists.
+#
+# Usage:
+#   databricks bundle deploy -t dev
+#   databricks bundle run   -t dev main_pipeline
+bundle:
+  name: ecom-signal-platform
+
+include:
+  - resources/*.yml
+
+sync:
+  include:
+    - ../../src/**
+
+variables:
+  environment:
+    description: dev | staging, becomes the `env` job parameter every task reads via config.py
+  catalog:
+    description: Unity Catalog catalog name (must match infra/terraform output `catalog_name`)
+  storage_suffix:
+    description: Storage-account suffix (must match the Terraform `storage_suffix` var)
+  job_cluster_policy_id:
+    description: From `terraform output job_policy_id` in infra/terraform/env/<target>
+  streaming_cluster_policy_id:
+    description: From `terraform output streaming_policy_id`
+  sql_warehouse_id:
+    description: From `terraform output sql_warehouse_id`; used by the SQL maintenance job
+  node_type_id:
+    default: Standard_DS3_v2
+  spark_version:
+    default: 15.4.x-scala2.12
+  pipeline_service_principal_app_id:
+    description: From `terraform output pipeline_application_id`; owns staging job runs
+
+targets:
+  dev:
+    mode: development
+    default: true
+    workspace:
+      host: ${env.DATABRICKS_HOST}
+    variables:
+      environment: dev
+      catalog: ecom_dev
+      storage_suffix: dv01
+
+  staging:
+    mode: production
+    workspace:
+      host: ${env.DATABRICKS_HOST}
+    run_as:
+      service_principal_name: ${var.pipeline_service_principal_app_id}
+    variables:
+      environment: staging
+      catalog: ecom_staging
+      storage_suffix: sg01

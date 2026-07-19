@@ -1,0 +1,46 @@
+# Order-domain batch DAG: bronze_orders_domain -> silver_orders_domain, on one shared job
+# cluster. Runs every 15 min, comfortably inside the <30min bronze and <30min-after-bronze
+# silver freshness SLAs in docs/project-charter.md without needing two separately-scheduled
+# jobs chained via run_job_task -- both stages share the same cadence in practice, so one job
+# with a task dependency is the simpler, equally-correct choice here (contrast with the gold
+# jobs in gold_jobs.yml, which genuinely need independent schedules).
+resources:
+  jobs:
+    order_domain_ingest:
+      name: "[${bundle.target}] order_domain_ingest"
+      schedule:
+        quartz_cron_expression: "0 */15 * * * ?"
+        timezone_id: UTC
+      parameters:
+        - name: env
+          default: ${var.environment}
+        - name: storage_suffix
+          default: ${var.storage_suffix}
+      job_clusters:
+        - job_cluster_key: batch_cluster
+          new_cluster:
+            spark_version: ${var.spark_version}
+            node_type_id: ${var.node_type_id}
+            num_workers: 2
+            policy_id: ${var.job_cluster_policy_id}
+            data_security_mode: SINGLE_USER
+      tasks:
+        - task_key: bronze_orders_domain
+          job_cluster_key: batch_cluster
+          spark_python_task:
+            python_file: ../../src/ingestion/batch/bronze_orders_domain.py
+          timeout_seconds: 1200
+          max_retries: 2
+          min_retry_interval_millis: 60000
+          retry_on_timeout: true
+
+        - task_key: silver_orders_domain
+          depends_on:
+            - task_key: bronze_orders_domain
+          job_cluster_key: batch_cluster
+          spark_python_task:
+            python_file: ../../src/transform/silver/silver_orders_domain.py
+          timeout_seconds: 1200
+          max_retries: 2
+          min_retry_interval_millis: 60000
+          retry_on_timeout: true

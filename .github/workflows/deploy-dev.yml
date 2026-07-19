@@ -1,0 +1,76 @@
+name: Deploy — dev
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  terraform-apply:
+    runs-on: ubuntu-latest
+    environment: dev
+    defaults:
+      run:
+        working-directory: infra/terraform/env/dev
+    outputs:
+      catalog_name: ${{ steps.tf_outputs.outputs.catalog_name }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.12.2"
+
+      - run: |
+          terraform init \
+            -backend-config="storage_account_name=stecomtfstate" \
+            -backend-config="container_name=tfstate" \
+            -backend-config="resource_group_name=rg-ecom-tfstate" \
+            -backend-config="key=dev.tfstate"
+        env:
+          ARM_USE_OIDC: "true"
+
+      - run: |
+          terraform apply -auto-approve -input=false \
+            -var="subscription_id=${{ vars.AZURE_SUBSCRIPTION_ID }}" \
+            -var="tenant_id=${{ vars.AZURE_TENANT_ID }}" \
+            -var="databricks_workspace_url=${{ vars.DATABRICKS_HOST }}" \
+            -var="storage_suffix=${{ vars.STORAGE_SUFFIX }}" \
+            -var="github_repo=${{ github.repository }}"
+        env:
+          ARM_USE_OIDC: "true"
+          DATABRICKS_AUTH_TYPE: azure-cli
+
+      - id: tf_outputs
+        run: echo "catalog_name=$(terraform output -raw catalog_name)" >> "$GITHUB_OUTPUT"
+
+  bundle-deploy:
+    needs: terraform-apply
+    runs-on: ubuntu-latest
+    environment: dev
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - uses: databricks/setup-cli@main
+      - name: databricks bundle deploy
+        working-directory: orchestration/databricks
+        run: databricks bundle deploy -t dev
+        env:
+          DATABRICKS_HOST: ${{ vars.DATABRICKS_HOST }}
+          DATABRICKS_AUTH_TYPE: azure-cli
+          BUNDLE_VAR_job_cluster_policy_id: ${{ vars.JOB_CLUSTER_POLICY_ID }}
+          BUNDLE_VAR_streaming_cluster_policy_id: ${{ vars.STREAMING_CLUSTER_POLICY_ID }}
+          BUNDLE_VAR_sql_warehouse_id: ${{ vars.SQL_WAREHOUSE_ID }}

@@ -1,0 +1,20 @@
+# Nightly OPTIMIZE/ZORDER/VACUUM housekeeping -- a SQL task (not spark_python_task) since it's
+# pure SQL DDL/maintenance with no Python logic, running against the shared BI SQL warehouse
+# rather than spinning up a dedicated job cluster.
+resources:
+  jobs:
+    maintenance_optimize:
+      name: "[${bundle.target}] maintenance_optimize"
+      schedule:
+        quartz_cron_expression: "0 0 3 * * ?" # daily, 03:00 UTC (off-peak, ahead of the 06:00 exec summary run)
+        timezone_id: UTC
+      tasks:
+        - task_key: run
+          sql_task:
+            warehouse_id: ${var.sql_warehouse_id}
+            file:
+              path: ../sql/optimize_maintenance.sql
+            parameters:
+              catalog: ${var.catalog}
+          timeout_seconds: 1800
+          max_retries: 1

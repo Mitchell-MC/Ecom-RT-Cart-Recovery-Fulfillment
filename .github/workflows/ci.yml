@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install ruff black
+      - run: ruff check src/ data_generation/ tests/
+      - run: black --check src/ data_generation/ tests/
+
+  unit-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17" # required by PySpark/Delta at test time; this repo has no JVM locally
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r tests/requirements.txt
+      - run: pytest tests/unit --junitxml=test-results.xml
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: unit-test-results
+          path: test-results.xml
+
+  data-generation-smoke-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r data_generation/requirements.txt
+      - name: Generate a few days of synthetic data end to end
+        working-directory: data_generation
+        run: |
+          python generate_clickstream.py --out /tmp/clickstream --days 2 --customers 100 --products 30
+          python generate_orders_domain.py --out /tmp/orders --days 2 --customers 100 --products 30 \
+            --clickstream-manifest-dir /tmp/clickstream --extra-orders-per-day 5
