@@ -1,5 +1,7 @@
 # Ecommerce Signal Platform
 
+[![CI](https://github.com/Mitchell-MC/Ecom-RT-Cart-Recovery-Fulfillment/actions/workflows/ci.yml/badge.svg)](https://github.com/Mitchell-MC/Ecom-RT-Cart-Recovery-Fulfillment/actions/workflows/ci.yml)
+
 A portfolio-grade lakehouse platform that turns raw ecommerce clickstream and order data into two
 operational signals a retail ops team would actually act on:
 

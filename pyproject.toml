@@ -33,8 +33,8 @@ exclude_lines = [
   'def main\(',
   'raise NotImplementedError',
 ]
-# Provisional floor. This repo has no local JVM, so the true coverage number is first
-# observable on CI (see the term-missing report + coverage.xml artifact in the unit-tests
-# job). Set deliberately low to avoid a spurious first-run failure; read the real number
-# off that run and ratchet this one line up toward 60+ as the P0/P1 tests land.
-fail_under = 30
+# Set from the measured number: CI reports 71.34% (unit-tests job, term-missing report and
+# coverage.xml artifact). Held a few points below that so ordinary refactors don't trip it,
+# while any real drop in tested transform/quality logic fails the build. Ratchet up as the
+# remaining P1 tests land -- lower it only with a reason, not to make a red build green.
+fail_under = 65
