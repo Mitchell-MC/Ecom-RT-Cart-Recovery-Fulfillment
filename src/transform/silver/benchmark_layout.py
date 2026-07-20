@@ -17,9 +17,10 @@ import time
 
 from pyspark.sql import SparkSession
 
-sys.path.append(
-    os.path.join(os.path.dirname(os.path.abspath(globals().get("__file__") or sys.argv[0])), "../../common")
-)
+# On a serverless spark_python_task the file is exec()'d with no __file__ defined;
+# sys.argv[0] holds the script path there. Classic clusters set __file__ normally.
+_THIS_DIR = os.path.dirname(os.path.abspath(globals().get("__file__") or sys.argv[0]))
+sys.path.append(os.path.join(_THIS_DIR, "../../common"))
 from config import get_config  # noqa: E402
 
 N_RUNS = 5

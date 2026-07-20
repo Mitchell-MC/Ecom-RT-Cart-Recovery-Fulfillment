@@ -29,9 +29,10 @@ from pyspark.sql.types import (
     StructType,
 )
 
-sys.path.append(
-    os.path.join(os.path.dirname(os.path.abspath(globals().get("__file__") or sys.argv[0])), "../../common")
-)
+# On a serverless spark_python_task the file is exec()'d with no __file__ defined;
+# sys.argv[0] holds the script path there. Classic clusters set __file__ normally.
+_THIS_DIR = os.path.dirname(os.path.abspath(globals().get("__file__") or sys.argv[0]))
+sys.path.append(os.path.join(_THIS_DIR, "../../common"))
 from audit import job_run  # noqa: E402
 from config import get_config  # noqa: E402
 
@@ -105,9 +106,9 @@ def main():
     ):
         query = (
             build_stream(spark, raw_path, checkpoint_path, schema_location)
-            .trigger(
-                processingTime="1 minute"
-            )  # continuous micro-batch, targets the <5min bronze SLA
+            # continuous micro-batch (targets the <5min bronze SLA) by default; available_now
+            # drains the backlog once and stops for a bounded/scheduled run.
+            .trigger(**cfg.stream_trigger("1 minute"))
             .outputMode("append")
             .toTable(target_table)
         )

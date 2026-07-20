@@ -168,7 +168,7 @@ def main():
                 )
             )
             .option("checkpointLocation", checkpoint_path)
-            .trigger(processingTime="2 minutes")
+            .trigger(**cfg.stream_trigger("2 minutes"))
             .start()
         )
         query.awaitTermination()

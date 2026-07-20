@@ -31,6 +31,10 @@ from dataclasses import dataclass
 # Must match the bundle targets in orchestration/databricks/databricks.yml.
 VALID_ENVS = ("dev", "staging")
 VALID_STORAGE_BACKENDS = ("adls", "uc_volume")
+# continuous: the always-on micro-batch loop for production streaming. available_now: drain the
+# current backlog once and stop -- how a streaming pipeline runs as a scheduled/on-demand batch
+# (see docs/distributed-compute-notes.md), and what lets the serverless demo run terminate.
+VALID_TRIGGER_MODES = ("continuous", "available_now")
 
 # For uc_volume: a single managed volume holds everything that isn't a table. Path is
 # /Volumes/{catalog}/{schema}/{volume}; created by scripts/bootstrap_uc.sh.
@@ -44,6 +48,7 @@ class PlatformConfig:
     storage_suffix: str = ""
     project: str = "ecom"
     storage_backend: str = "adls"
+    trigger_mode: str = "continuous"
 
     def __post_init__(self) -> None:
         if self.env not in VALID_ENVS:
@@ -54,6 +59,11 @@ class PlatformConfig:
             raise ValueError(
                 f"unknown storage_backend {self.storage_backend!r}; expected one of "
                 f"{list(VALID_STORAGE_BACKENDS)}"
+            )
+        if self.trigger_mode not in VALID_TRIGGER_MODES:
+            raise ValueError(
+                f"unknown trigger_mode {self.trigger_mode!r}; expected one of "
+                f"{list(VALID_TRIGGER_MODES)}"
             )
 
     @property
@@ -92,6 +102,17 @@ class PlatformConfig:
     def checkpoint_path(self, stream_name: str) -> str:
         return f"{self.container_path('checkpoints')}/{self.env}/{stream_name}"
 
+    def stream_trigger(self, processing_time: str) -> dict:
+        """Trigger kwargs to splat into DataStreamWriter.trigger().
+
+        continuous uses the given micro-batch interval and runs forever; available_now processes
+        whatever is currently in the source and then terminates, so the same streaming code runs
+        as a bounded, re-runnable job (scheduled ingestion, or this repo's serverless demo).
+        """
+        if self.trigger_mode == "available_now":
+            return {"availableNow": True}
+        return {"processingTime": processing_time}
+
 
 def get_config(argv: Sequence[str] | None = None) -> PlatformConfig:
     """Resolve config from job parameters passed on the command line.
@@ -105,9 +126,13 @@ def get_config(argv: Sequence[str] | None = None) -> PlatformConfig:
     parser.add_argument(
         "--storage_backend", default="adls", choices=VALID_STORAGE_BACKENDS
     )
+    parser.add_argument(
+        "--trigger_mode", default="continuous", choices=VALID_TRIGGER_MODES
+    )
     args, _unknown = parser.parse_known_args(argv)
     return PlatformConfig(
         env=args.env,
         storage_suffix=args.storage_suffix,
         storage_backend=args.storage_backend,
+        trigger_mode=args.trigger_mode,
     )

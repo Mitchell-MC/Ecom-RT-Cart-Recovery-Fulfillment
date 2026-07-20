@@ -6,12 +6,18 @@
 # serverless via target overrides is more fragile than just declaring the serverless shape
 # directly. Both bundles deploy the SAME src/ Python -- only compute and storage differ.
 #
+# The two streaming jobs run with --trigger_mode=available_now: they drain the current backlog
+# once and terminate, so the whole graph runs as one bounded, re-runnable job instead of two
+# perpetual streams plus a batch DAG. Production on Azure keeps the default continuous trigger.
+#
 # Prereqs (once): scripts/bootstrap_uc.sh <profile> <warehouse_id> creates the catalog/schemas/
-# volume, then upload the order-domain CSVs to /Volumes/ecom_dev/bronze/ops/bronze/raw/orders/.
+# volume, then upload source data under /Volumes/ecom_dev/bronze/ops/bronze/raw/:
+#   raw/orders/*.csv           (order-domain extracts)
+#   raw/clickstream/dt=*/*.json (clickstream events, JSONL)
 #
 # Deploy + run:
 #   databricks bundle deploy -t meridian -p meridian-dev
-#   databricks bundle run order_domain_ingest_serverless -t meridian -p meridian-dev
+#   databricks bundle run ecom_signal_pipeline_serverless -t meridian -p meridian-dev
 bundle:
   name: ecom-signal-platform-serverless
 
@@ -37,10 +43,11 @@ targets:
       host: https://dbc-08add949-9c19.cloud.databricks.com
     resources:
       jobs:
-        order_domain_ingest_serverless:
-          name: "[serverless] order_domain_ingest"
-          # No schedule: this variant is run on demand to demonstrate the pipeline end to end.
+        ecom_signal_pipeline_serverless:
+          name: "[serverless] ecom_signal_pipeline"
+          # No schedule: run on demand to demonstrate the full medallion end to end.
           tasks:
+            # --- order domain (batch) ---
             - task_key: bronze_orders_domain
               spark_python_task:
                 python_file: ../../../src/ingestion/batch/bronze_orders_domain.py
@@ -62,17 +69,55 @@ targets:
                   - "--storage_backend=uc_volume"
               environment_key: default
 
-            # gold_fulfillment_risk depends only on the order-domain silver tables (orders,
-            # shipments, order_items, inventory) -- not on clickstream -- so it completes a full
-            # bronze->silver->gold slice from batch data alone, and exercises the live
-            # assert_upstream_fresh gate against silver's just-written watermark.
-            # gold_cart_recovery and gold_exec_summary need the streaming clickstream path and
-            # are intentionally not in this batch-only bundle.
+            # --- clickstream (Structured Streaming, drained once via available_now) ---
+            - task_key: bronze_clickstream_stream
+              spark_python_task:
+                python_file: ../../../src/ingestion/streaming/bronze_clickstream_stream.py
+                parameters:
+                  - "--env=${var.catalog_env}"
+                  - "--storage_backend=uc_volume"
+                  - "--trigger_mode=available_now"
+              environment_key: default
+
+            - task_key: silver_clickstream
+              depends_on:
+                - task_key: bronze_clickstream_stream
+              spark_python_task:
+                python_file: ../../../src/transform/silver/silver_clickstream.py
+                parameters:
+                  - "--env=${var.catalog_env}"
+                  - "--storage_backend=uc_volume"
+                  - "--trigger_mode=available_now"
+              environment_key: default
+
+            # --- gold signals (batch) ---
             - task_key: gold_fulfillment_risk
               depends_on:
                 - task_key: silver_orders_domain
               spark_python_task:
                 python_file: ../../../src/transform/gold/gold_fulfillment_risk.py
+                parameters:
+                  - "--env=${var.catalog_env}"
+                  - "--storage_backend=uc_volume"
+              environment_key: default
+
+            - task_key: gold_cart_recovery
+              depends_on:
+                - task_key: silver_clickstream
+                - task_key: silver_orders_domain
+              spark_python_task:
+                python_file: ../../../src/transform/gold/gold_cart_recovery.py
+                parameters:
+                  - "--env=${var.catalog_env}"
+                  - "--storage_backend=uc_volume"
+              environment_key: default
+
+            - task_key: gold_exec_summary_marts
+              depends_on:
+                - task_key: gold_cart_recovery
+                - task_key: gold_fulfillment_risk
+              spark_python_task:
+                python_file: ../../../src/transform/gold/gold_exec_summary_marts.py
                 parameters:
                   - "--env=${var.catalog_env}"
                   - "--storage_backend=uc_volume"

@@ -59,3 +59,43 @@ def test_missing_storage_suffix_raises_only_when_storage_is_touched():
 def test_direct_construction_validates_env():
     with pytest.raises(ValueError, match="unknown env"):
         PlatformConfig(env="produciton")
+
+
+# --- uc_volume storage backend (serverless / Default-Storage workspaces) ---
+
+
+def test_uc_volume_backend_uses_managed_paths_and_needs_no_suffix():
+    cfg = get_config(["--env=dev", "--storage_backend=uc_volume"])
+    assert cfg.storage_backend == "uc_volume"
+    # Tables are unchanged (managed): catalog.schema.name.
+    assert cfg.table("bronze", "orders") == "ecom_dev.bronze.orders"
+    # Non-table paths point at the UC volume instead of abfss://, with no storage_suffix needed.
+    assert cfg.container_path("bronze") == "/Volumes/ecom_dev/bronze/ops/bronze"
+    assert (
+        cfg.checkpoint_path("clickstream_bronze")
+        == "/Volumes/ecom_dev/bronze/ops/checkpoints/dev/clickstream_bronze"
+    )
+
+
+def test_unknown_storage_backend_raises():
+    with pytest.raises(ValueError, match="unknown storage_backend"):
+        PlatformConfig(env="dev", storage_backend="gcs")
+
+
+# --- trigger_mode (continuous vs available_now) ---
+
+
+def test_trigger_mode_defaults_to_continuous():
+    cfg = get_config(["--env=dev"])
+    assert cfg.trigger_mode == "continuous"
+    assert cfg.stream_trigger("1 minute") == {"processingTime": "1 minute"}
+
+
+def test_available_now_trigger_drains_and_stops():
+    cfg = get_config(["--env=dev", "--trigger_mode=available_now"])
+    assert cfg.stream_trigger("2 minutes") == {"availableNow": True}
+
+
+def test_unknown_trigger_mode_raises():
+    with pytest.raises(ValueError, match="unknown trigger_mode"):
+        PlatformConfig(env="dev", trigger_mode="microbatch")
