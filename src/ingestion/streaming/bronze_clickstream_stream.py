@@ -82,16 +82,13 @@ def build_stream(
 
 def main():
     spark = SparkSession.builder.appName("bronze_clickstream_stream").getOrCreate()
-    dbutils = _get_dbutils(spark)
-    cfg = get_config(dbutils)
+    cfg = get_config()
 
-    dbutils.widgets.text("storage_suffix", "")
-    storage_suffix = dbutils.widgets.get("storage_suffix")
-    storage_account = cfg.storage_account(storage_suffix)
-
-    raw_path = f"{cfg.container_path(storage_account, 'bronze')}/raw/clickstream"
-    schema_location = f"{cfg.container_path(storage_account, 'checkpoints')}/{cfg.env}/clickstream_schema"
-    checkpoint_path = cfg.checkpoint_path(storage_account, "clickstream_bronze")
+    raw_path = f"{cfg.container_path('bronze')}/raw/clickstream"
+    schema_location = (
+        f"{cfg.container_path('checkpoints')}/{cfg.env}/clickstream_schema"
+    )
+    checkpoint_path = cfg.checkpoint_path("clickstream_bronze")
     target_table = cfg.table("bronze", "clickstream_events")
 
     query = (
@@ -103,12 +100,6 @@ def main():
         .toTable(target_table)
     )
     query.awaitTermination()
-
-
-def _get_dbutils(spark: SparkSession):
-    from pyspark.dbutils import DBUtils  # available on Databricks Runtime
-
-    return DBUtils(spark)
 
 
 if __name__ == "__main__":

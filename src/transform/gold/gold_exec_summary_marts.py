@@ -123,10 +123,7 @@ def upsert_daily_row(spark: SparkSession, target_table: str, metrics: dict) -> N
 def main():
     started_at = datetime.now(timezone.utc)
     spark = SparkSession.builder.appName("gold_exec_summary_marts").getOrCreate()
-    from pyspark.dbutils import DBUtils
-
-    dbutils = DBUtils(spark)
-    cfg = get_config(dbutils)
+    cfg = get_config()
 
     cart_recovery_signal = spark.read.table(cfg.table("gold", "cart_recovery_signal"))
     fulfillment_risk_signal = spark.read.table(

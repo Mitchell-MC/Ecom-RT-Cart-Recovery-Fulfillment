@@ -174,15 +174,8 @@ def _current_run_id(spark: SparkSession) -> str:
 
 def main():
     spark = SparkSession.builder.appName("bronze_orders_domain").getOrCreate()
-    from pyspark.dbutils import DBUtils
-
-    dbutils = DBUtils(spark)
-    cfg = get_config(dbutils)
-
-    dbutils.widgets.text("storage_suffix", "")
-    storage_suffix = dbutils.widgets.get("storage_suffix")
-    storage_account = cfg.storage_account(storage_suffix)
-    raw_path = f"{cfg.container_path(storage_account, 'bronze')}/raw/orders"
+    cfg = get_config()
+    raw_path = f"{cfg.container_path('bronze')}/raw/orders"
 
     for spec in TABLE_SPECS:
         source = read_source(spark, raw_path, spec)

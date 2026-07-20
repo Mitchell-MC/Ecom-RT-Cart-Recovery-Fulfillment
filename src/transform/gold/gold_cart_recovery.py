@@ -151,10 +151,7 @@ def score_carts(abandoned: DataFrame, orders: DataFrame) -> DataFrame:
 def main():
     started_at = datetime.now(timezone.utc)
     spark = SparkSession.builder.appName("gold_cart_recovery").getOrCreate()
-    from pyspark.dbutils import DBUtils
-
-    dbutils = DBUtils(spark)
-    cfg = get_config(dbutils)
+    cfg = get_config()
 
     events = spark.read.table(cfg.table("silver", "clickstream_events"))
     orders = spark.read.table(cfg.table("silver", "orders"))

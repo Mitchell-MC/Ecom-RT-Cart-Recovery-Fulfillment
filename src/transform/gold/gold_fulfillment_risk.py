@@ -105,10 +105,7 @@ def score(orders: DataFrame) -> DataFrame:
 def main():
     started_at = datetime.now(timezone.utc)
     spark = SparkSession.builder.appName("gold_fulfillment_risk").getOrCreate()
-    from pyspark.dbutils import DBUtils
-
-    dbutils = DBUtils(spark)
-    cfg = get_config(dbutils)
+    cfg = get_config()
 
     orders = spark.read.table(cfg.table("silver", "orders"))
     shipments = spark.read.table(cfg.table("silver", "shipments"))

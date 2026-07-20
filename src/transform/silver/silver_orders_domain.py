@@ -140,10 +140,7 @@ def process_table(spark: SparkSession, cfg, spec: SilverTableSpec) -> None:
 
 def main():
     spark = SparkSession.builder.appName("silver_orders_domain").getOrCreate()
-    from pyspark.dbutils import DBUtils
-
-    dbutils = DBUtils(spark)
-    cfg = get_config(dbutils)
+    cfg = get_config()
 
     for spec in TABLE_SPECS:
         process_table(spark, cfg, spec)

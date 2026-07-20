@@ -74,10 +74,7 @@ def file_count(spark: SparkSession, table: str) -> int:
 
 def main():
     spark = SparkSession.builder.appName("benchmark_layout").getOrCreate()
-    from pyspark.dbutils import DBUtils
-
-    dbutils = DBUtils(spark)
-    cfg = get_config(dbutils)
+    cfg = get_config()
 
     layout_a = cfg.table("silver", "clickstream_events")
     layout_b = cfg.table("silver", "_bench_clickstream_events_zorder")

@@ -126,19 +126,12 @@ def process_batch(
 
 def main():
     spark = SparkSession.builder.appName("silver_clickstream").getOrCreate()
-    from pyspark.dbutils import DBUtils
-
-    dbutils = DBUtils(spark)
-    cfg = get_config(dbutils)
-
-    dbutils.widgets.text("storage_suffix", "")
-    storage_suffix = dbutils.widgets.get("storage_suffix")
-    storage_account = cfg.storage_account(storage_suffix)
+    cfg = get_config()
 
     bronze_table = cfg.table("bronze", "clickstream_events")
     silver_table = cfg.table("silver", "clickstream_events")
     quarantine_table = cfg.table("silver", "clickstream_events_quarantine")
-    checkpoint_path = cfg.checkpoint_path(storage_account, "clickstream_silver")
+    checkpoint_path = cfg.checkpoint_path("clickstream_silver")
 
     stream = (
         spark.readStream.format("delta")
