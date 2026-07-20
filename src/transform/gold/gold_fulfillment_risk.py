@@ -125,9 +125,9 @@ def main():
         with_inventory = with_inventory_risk(open_orders, order_items, inventory)
         scored = score(with_inventory)
 
-        scored.write.format("delta").mode("overwrite").option(
-            "overwriteSchema", "true"
-        ).saveAsTable(target_table)
+        # No overwriteSchema -- see the note in gold_cart_recovery.main. Gold is the published
+        # contract, so a schema change here must be a deliberate migration.
+        scored.write.format("delta").mode("overwrite").saveAsTable(target_table)
 
         run.row_count = scored.count()
         print(f"gold.fulfillment_risk_signal: {run.row_count} open orders scored")

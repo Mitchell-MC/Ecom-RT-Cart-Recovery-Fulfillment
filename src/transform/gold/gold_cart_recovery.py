@@ -169,9 +169,12 @@ def main():
         abandoned = filter_abandoned(cart_agg)
         scored = score_carts(abandoned, orders)
 
-        scored.write.format("delta").mode("overwrite").option(
-            "overwriteSchema", "true"
-        ).saveAsTable(target_table)
+        # No overwriteSchema. Gold is the contract with Power BI and the business, which makes
+        # it the strictest boundary in the pipeline rather than the loosest: with schema
+        # overwrite on, a transform bug that dropped or renamed a column silently rewrote the
+        # published schema and broke the dashboard instead of the job. A real schema change is
+        # now a deliberate migration (ALTER TABLE, or drop and rebuild), not a side effect.
+        scored.write.format("delta").mode("overwrite").saveAsTable(target_table)
 
         run.row_count = scored.count()
         print(f"gold.cart_recovery_signal: {run.row_count} abandoned carts scored")
