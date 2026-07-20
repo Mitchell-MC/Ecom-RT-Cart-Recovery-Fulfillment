@@ -22,8 +22,10 @@ from pyspark.sql import functions as F
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(os.path.join(_THIS_DIR, "../../common"))
 sys.path.append(os.path.join(_THIS_DIR, "../../quality"))
-from audit import job_run  # noqa: E402
+from audit import job_run, log_dataset_metrics  # noqa: E402
 from config import get_config  # noqa: E402
+from reconciliation import assert_rows_conserved  # noqa: E402
+from volume import assert_volume_plausible, trailing_baseline  # noqa: E402
 from dq_checks import (  # noqa: E402
     DQRule,
     apply_dq_rules,
@@ -131,20 +133,22 @@ def process_table(
     silver_table = cfg.table("silver", spec.name)
     quarantine_table = cfg.table("silver", f"{spec.name}_quarantine")
 
+    dataset = f"silver.{spec.name}"
     df = spark.read.table(bronze_table)
     standardized = spec.standardize(df)
+    baseline = trailing_baseline(spark, cfg, dataset)
 
     if spec.dq_rules:
         clean_df, quarantine_df = apply_dq_rules(standardized, spec.dq_rules())
         write_quarantine(quarantine_df, quarantine_table)
         quarantined_count = quarantine_df.count()
+        row_count = clean_df.count()
         # Checked after the quarantine write so the rows that triggered it are inspectable --
         # raising first would leave nothing to diagnose from.
-        assert_quarantine_rate_ok(
-            f"silver.{spec.name}", clean_df.count(), quarantined_count
-        )
+        assert_quarantine_rate_ok(dataset, row_count, quarantined_count)
     else:
         clean_df, quarantined_count = standardized, 0
+        row_count = clean_df.count()
 
     # Uniform silver watermark: without it these tables carry only _bronze_ingested_at, so a
     # freshness check on silver would actually be measuring bronze and would read as fresh even
@@ -152,10 +156,29 @@ def process_table(
     clean_df = clean_df.withColumn("_silver_processed_at", F.current_timestamp())
 
     merge_into_silver(spark, clean_df, silver_table, spec.merge_keys)
-    row_count = clean_df.count()
-    print(
-        f"silver.{spec.name}: {row_count} rows merged, {quarantined_count} quarantined"
+
+    source_rows = row_count + quarantined_count
+    log_dataset_metrics(
+        spark,
+        cfg,
+        dataset=dataset,
+        layer="silver",
+        source_rows=source_rows,
+        written_rows=row_count,
+        quarantined_rows=quarantined_count,
     )
+    # apply_dq_rules splits on a filter, so this balances by construction today. It is asserted
+    # anyway: the invariant is what makes a future change that drops rows here loud instead of
+    # silent, and that is the entire failure mode this branch exists to close.
+    assert_rows_conserved(
+        dataset,
+        source_rows=source_rows,
+        written_rows=row_count,
+        quarantined_rows=quarantined_count,
+    )
+    assert_volume_plausible(baseline, row_count)
+
+    print(f"{dataset}: {row_count} rows merged, {quarantined_count} quarantined")
     return row_count, quarantined_count
 
 

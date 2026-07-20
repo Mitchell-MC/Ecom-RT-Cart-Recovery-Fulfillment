@@ -39,11 +39,13 @@ from pyspark.sql.types import (
     TimestampType,
 )
 
-sys.path.append(
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../common")
-)
-from audit import job_run  # noqa: E402
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.append(os.path.join(_THIS_DIR, "../../common"))
+sys.path.append(os.path.join(_THIS_DIR, "../../quality"))
+from audit import job_run, log_dataset_metrics  # noqa: E402
 from config import get_config  # noqa: E402
+from reconciliation import assert_dedupe_rate_ok, assert_rows_conserved  # noqa: E402
+from volume import assert_volume_plausible, trailing_baseline  # noqa: E402
 
 
 @dataclass(frozen=True)
@@ -234,24 +236,38 @@ def merge_into_bronze(
     source: DataFrame,
     target_table: str,
     merge_keys: tuple[str, ...],
-) -> None:
+) -> int:
+    """Merge `source` into the bronze table, returning the number of rows actually written.
+
+    The caller subtracts this from the source count to get what dedupe dropped. Rows removed
+    here are removed on purpose, but only reconciling them makes the difference between "3
+    restated rows" and "the extract repeated half its contents" visible.
+    """
     # Applied to both paths: MERGE rejects duplicate source rows loudly, but saveAsTable would
     # accept them silently and leave run 2's MERGE to crash on the mess.
-    source = dedupe_on_keys(source, merge_keys)
+    deduped = dedupe_on_keys(source, merge_keys)
+    # Cached because it is consumed twice -- once by this count, once by the write. Without it
+    # the dedupe window is recomputed, which is the most expensive step in this job.
+    deduped.cache()
+    written_rows = deduped.count()
 
-    if not spark.catalog.tableExists(target_table):
-        source.write.format("delta").saveAsTable(target_table)
-        return
+    try:
+        if not spark.catalog.tableExists(target_table):
+            deduped.write.format("delta").saveAsTable(target_table)
+            return written_rows
 
-    target = DeltaTable.forName(spark, target_table)
-    condition = " AND ".join(f"target.{k} <=> source.{k}" for k in merge_keys)
-    (
-        target.alias("target")
-        .merge(source.alias("source"), condition)
-        .whenMatchedUpdateAll()
-        .whenNotMatchedInsertAll()
-        .execute()
-    )
+        target = DeltaTable.forName(spark, target_table)
+        condition = " AND ".join(f"target.{k} <=> source.{k}" for k in merge_keys)
+        (
+            target.alias("target")
+            .merge(deduped.alias("source"), condition)
+            .whenMatchedUpdateAll()
+            .whenNotMatchedInsertAll()
+            .execute()
+        )
+        return written_rows
+    finally:
+        deduped.unpersist()
 
 
 def _current_run_id(spark: SparkSession) -> str:
@@ -274,16 +290,48 @@ def main():
     ) as run:
         total_rows = 0
         for spec in TABLE_SPECS:
+            dataset = f"bronze.{spec.name}"
             source = read_source(spark, raw_path, spec)
             source_rows = validate(source, spec)
             target_table = cfg.table("bronze", spec.name)
-            merge_into_bronze(spark, source, target_table, spec.merge_keys)
-            total_rows += source_rows
+
+            # Read before the write, so the baseline is this dataset's history *excluding*
+            # the run being judged -- otherwise a load is partly compared against itself.
+            baseline = trailing_baseline(spark, cfg, dataset)
+
+            written_rows = merge_into_bronze(
+                spark, source, target_table, spec.merge_keys
+            )
+            deduped_rows = source_rows - written_rows
+
+            log_dataset_metrics(
+                spark,
+                cfg,
+                dataset=dataset,
+                layer="bronze",
+                source_rows=source_rows,
+                written_rows=written_rows,
+                deduped_rows=deduped_rows,
+            )
+
+            # Metrics are written before the assertions so a failing load still records what it
+            # saw -- the row counts are the first thing anyone will want during triage, and a
+            # run that fails without leaving them behind forces a manual re-read of the source.
+            assert_rows_conserved(
+                dataset,
+                source_rows=source_rows,
+                written_rows=written_rows,
+                deduped_rows=deduped_rows,
+            )
+            assert_dedupe_rate_ok(dataset, source_rows, deduped_rows)
+            assert_volume_plausible(baseline, written_rows)
+
+            total_rows += written_rows
             # Recorded per table so a mid-loop failure still shows how far the run got.
             run.row_count = total_rows
             print(
-                f"bronze.{spec.name}: {source_rows} source rows -> {target_table} "
-                f"({describe_last_write(spark, target_table)})"
+                f"{dataset}: {source_rows} source rows, {deduped_rows} deduped -> "
+                f"{target_table} ({describe_last_write(spark, target_table)})"
             )
 
 

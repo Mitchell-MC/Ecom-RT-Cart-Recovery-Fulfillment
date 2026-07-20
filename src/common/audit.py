@@ -162,3 +162,75 @@ def log_run(
 
 def _row_schema() -> StructType:
     return StructType([f for f in AUDIT_SCHEMA.fields if f.name != "finished_at"])
+
+
+# One row per dataset per run, as opposed to pipeline_audit_log's one row per *run*. Kept
+# separate rather than folded into that table because the two answer different questions and
+# mixing grains in one table makes both awkward to query: pipeline_audit_log answers "did this
+# job run and did it work", this answers "what happened to this dataset's rows".
+#
+# The row counts are recorded as a chain -- source -> written, with what was dropped in between
+# -- because the interesting failures live in the gaps. A source that suddenly has 40% duplicate
+# keys is a broken upstream export, but after dedupe it produces a perfectly clean bronze table
+# and looks identical to a healthy load.
+DATASET_METRICS_SCHEMA = StructType(
+    [
+        StructField("dataset", StringType(), False),
+        StructField("layer", StringType(), False),
+        StructField("run_id", StringType(), True),
+        StructField("source_rows", LongType(), True),
+        StructField("written_rows", LongType(), True),
+        StructField("deduped_rows", LongType(), True),
+        StructField("quarantined_rows", LongType(), True),
+        StructField("measured_at", TimestampType(), False),
+    ]
+)
+
+
+def log_dataset_metrics(
+    spark: SparkSession,
+    cfg,
+    *,
+    dataset: str,
+    layer: str,
+    source_rows: int,
+    written_rows: int,
+    deduped_rows: int = 0,
+    quarantined_rows: int = 0,
+) -> None:
+    """Record the row-count chain for one dataset in one run.
+
+    Consumed by src/quality/volume.py, which compares written_rows against this table's own
+    trailing history -- so every run both checks itself against the past and contributes the
+    baseline the next run will be checked against.
+    """
+    metrics_table = cfg.table("gold", "dataset_metrics")
+    run_id = spark.conf.get("spark.databricks.job.runId", "manual")
+
+    row = spark.createDataFrame(
+        [
+            {
+                "dataset": dataset,
+                "layer": layer,
+                "run_id": run_id,
+                "source_rows": source_rows,
+                "written_rows": written_rows,
+                "deduped_rows": deduped_rows,
+                "quarantined_rows": quarantined_rows,
+            }
+        ],
+        schema=_metrics_row_schema(),
+    ).withColumn("measured_at", F.current_timestamp())
+
+    if spark.catalog.tableExists(metrics_table):
+        row.write.format("delta").mode("append").option(
+            "mergeSchema", "true"
+        ).saveAsTable(metrics_table)
+    else:
+        row.write.format("delta").saveAsTable(metrics_table)
+
+
+def _metrics_row_schema() -> StructType:
+    return StructType(
+        [f for f in DATASET_METRICS_SCHEMA.fields if f.name != "measured_at"]
+    )
