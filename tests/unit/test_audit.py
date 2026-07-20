@@ -42,7 +42,8 @@ def test_success_logs_one_row_with_body_row_count(logged):
     assert len(logged) == 1
     assert logged[0]["status"] == "success"
     assert logged[0]["row_count"] == 42
-    assert logged[0]["error_message"] is None
+    # The success path omits error_message; log_run defaults it to None.
+    assert logged[0].get("error_message") is None
 
 
 def test_failure_logs_failed_status_and_reraises(logged):
