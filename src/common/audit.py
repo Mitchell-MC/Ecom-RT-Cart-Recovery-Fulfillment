@@ -31,6 +31,8 @@ from pyspark.sql.types import (
     TimestampType,
 )
 
+from alerting import post_alert, run_url
+
 AUDIT_SCHEMA = StructType(
     [
         StructField("job_name", StringType(), False),
@@ -97,6 +99,15 @@ def job_run(
             )
         except Exception:  # pragma: no cover -- diagnostic only
             traceback.print_exc()
+
+        _alert_failure(
+            spark,
+            cfg,
+            job_name=job_name,
+            target_table=target_table,
+            started_at=started_at,
+            exc=exc,
+        )
         raise
     else:
         log_run(
@@ -115,6 +126,58 @@ def job_run(
 def _format_error(exc: BaseException, limit: int = 2000) -> str:
     text = f"{type(exc).__name__}: {exc}"
     return text[:limit]
+
+
+def _alert_failure(
+    spark: SparkSession,
+    cfg,
+    *,
+    job_name: str,
+    target_table: str,
+    started_at,
+    exc: BaseException,
+) -> None:
+    """Send the actionable Slack alert for a failed run. Never raises."""
+    try:
+        details = [
+            ("Target", f"`{target_table}`"),
+            ("Failed at", datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")),
+            ("Error", f"`{_format_error(exc, limit=400)}`"),
+        ]
+
+        last_good = _last_successful_run(spark, cfg, job_name)
+        # "Last good run" is what turns an alert into a scoped incident: it is the difference
+        # between "this just broke" and "this has been broken for three days", and it decides
+        # who needs to be told before anything is fixed.
+        last_good_text = (
+            last_good.strftime("%Y-%m-%d %H:%M UTC") if last_good else "none on record"
+        )
+        details.append(("Last good run", last_good_text))
+
+        post_alert(
+            title=f"Pipeline failure: {job_name}",
+            job_name=job_name,
+            env=cfg.env,
+            details=details,
+            run_url=run_url(spark),
+        )
+    except Exception:  # pragma: no cover -- alerting must never mask the real failure
+        traceback.print_exc()
+
+
+def _last_successful_run(spark: SparkSession, cfg, job_name: str):
+    """Timestamp of this job's most recent success, or None if there isn't one on record."""
+    audit_table = cfg.table("gold", "pipeline_audit_log")
+    if not spark.catalog.tableExists(audit_table):
+        return None
+
+    row = (
+        spark.read.table(audit_table)
+        .filter((F.col("job_name") == job_name) & (F.col("status") == "success"))
+        .agg(F.max("finished_at").alias("last_good"))
+        .collect()[0]
+    )
+    return row["last_good"]
 
 
 def log_run(

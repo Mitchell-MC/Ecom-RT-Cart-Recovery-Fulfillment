@@ -36,6 +36,10 @@ resources:
             num_workers: 2
             policy_id: ${var.job_cluster_policy_id}
             data_security_mode: SINGLE_USER
+            spark_env_vars:
+              # Injected from a Databricks secret scope, never a job parameter -- parameters
+              # are visible in the run UI and the Jobs API. src/common/alerting.py reads this.
+              SLACK_WEBHOOK_URL: "{{secrets/${var.secret_scope}/slack_webhook_url}}"
       tasks:
         - task_key: bronze_orders_domain
           job_cluster_key: batch_cluster

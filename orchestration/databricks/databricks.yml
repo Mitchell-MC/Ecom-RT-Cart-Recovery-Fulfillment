@@ -34,6 +34,14 @@ variables:
     default: 15.4.x-scala2.12
   pipeline_service_principal_app_id:
     description: From `terraform output pipeline_application_id`; owns staging job runs
+  secret_scope:
+    default: ecom
+    description: >-
+      Databricks secret scope holding `slack_webhook_url`, injected into job clusters as
+      SLACK_WEBHOOK_URL. Create with:
+      `databricks secrets create-scope ecom && databricks secrets put-secret ecom slack_webhook_url`.
+      Jobs run fine without it -- alerting.py skips the Slack post and logs instead -- so a
+      missing secret degrades the alert, it does not break the pipeline.
   alert_email:
     description: >-
       Address receiving on_failure / SLA-breach notifications for every job. Required: a job

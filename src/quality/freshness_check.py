@@ -22,6 +22,7 @@ from pyspark.sql import SparkSession
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(os.path.join(_THIS_DIR, "../common"))
+from alerting import post_alert, run_url  # noqa: E402
 from config import get_config  # noqa: E402
 from freshness import (  # noqa: E402
     BRONZE_WATERMARK,
@@ -60,6 +61,17 @@ def main():
         print(f"FRESHNESS BREACH ({len(breaches)} dataset(s) outside SLA):")
         for breach in breaches:
             print(f"  - {breach}")
+
+        # This is the alert that catches a pipeline nobody is running, so it is the one most
+        # likely to be the first anyone hears of an outage. It names the datasets rather than
+        # the task, because "freshness_check failed" tells the reader nothing they can act on.
+        post_alert(
+            title=f"Freshness SLA breach: {len(breaches)} dataset(s) stale",
+            job_name="freshness_check",
+            env=cfg.env,
+            details=[("Stale datasets", "\n" + "\n".join(f"• {b}" for b in breaches))],
+            run_url=run_url(spark),
+        )
         raise SystemExit(1)
 
     print(f"freshness OK: {len(MONITORED)} datasets inside SLA")
