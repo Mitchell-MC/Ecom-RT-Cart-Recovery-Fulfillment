@@ -13,6 +13,13 @@ dev's tables while reporting success.
 
 Table/path naming here must match infra/terraform/modules/unity-catalog (catalog = "ecom_{env}",
 schemas bronze/silver/gold) and infra/terraform/modules/storage (container URLs).
+
+Two storage backends. `adls` is the project's Azure default: external tables under
+`abfss://…dfs.core.windows.net`, provisioned by Terraform. `uc_volume` is for a serverless /
+Default-Storage workspace that has no ADLS account -- managed tables (unchanged: `cfg.table` is
+already just `catalog.schema.name`) plus a Unity Catalog volume for the raw-file landing and
+streaming checkpoints that would otherwise live in a storage container. The transform/quality
+code is identical across both; only where bytes physically land differs.
 """
 
 from __future__ import annotations
@@ -23,6 +30,12 @@ from dataclasses import dataclass
 
 # Must match the bundle targets in orchestration/databricks/databricks.yml.
 VALID_ENVS = ("dev", "staging")
+VALID_STORAGE_BACKENDS = ("adls", "uc_volume")
+
+# For uc_volume: a single managed volume holds everything that isn't a table. Path is
+# /Volumes/{catalog}/{schema}/{volume}; created by scripts/bootstrap_uc.sh.
+_VOLUME_SCHEMA = "bronze"
+_VOLUME_NAME = "ops"
 
 
 @dataclass(frozen=True)
@@ -30,11 +43,17 @@ class PlatformConfig:
     env: str
     storage_suffix: str = ""
     project: str = "ecom"
+    storage_backend: str = "adls"
 
     def __post_init__(self) -> None:
         if self.env not in VALID_ENVS:
             raise ValueError(
                 f"unknown env {self.env!r}; expected one of {list(VALID_ENVS)}"
+            )
+        if self.storage_backend not in VALID_STORAGE_BACKENDS:
+            raise ValueError(
+                f"unknown storage_backend {self.storage_backend!r}; expected one of "
+                f"{list(VALID_STORAGE_BACKENDS)}"
             )
 
     @property
@@ -59,7 +78,15 @@ class PlatformConfig:
             )
         return f"st{self.project}{self.env}{self.storage_suffix}"
 
+    @property
+    def volume_root(self) -> str:
+        return f"/Volumes/{self.catalog}/{_VOLUME_SCHEMA}/{_VOLUME_NAME}"
+
     def container_path(self, container: str) -> str:
+        # In uc_volume mode there is no storage account; every non-table path is a subdirectory
+        # of the one managed volume, so "container" becomes a top-level folder inside it.
+        if self.storage_backend == "uc_volume":
+            return f"{self.volume_root}/{container}"
         return f"abfss://{container}@{self.storage_account}.dfs.core.windows.net"
 
     def checkpoint_path(self, stream_name: str) -> str:
@@ -75,5 +102,12 @@ def get_config(argv: Sequence[str] | None = None) -> PlatformConfig:
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("--env", required=True, choices=VALID_ENVS)
     parser.add_argument("--storage_suffix", default="")
+    parser.add_argument(
+        "--storage_backend", default="adls", choices=VALID_STORAGE_BACKENDS
+    )
     args, _unknown = parser.parse_known_args(argv)
-    return PlatformConfig(env=args.env, storage_suffix=args.storage_suffix)
+    return PlatformConfig(
+        env=args.env,
+        storage_suffix=args.storage_suffix,
+        storage_backend=args.storage_backend,
+    )

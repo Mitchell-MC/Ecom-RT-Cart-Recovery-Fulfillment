@@ -39,10 +39,12 @@ from pyspark.sql.types import (
     TimestampType,
 )
 
-_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+# On a serverless spark_python_task the file is exec()'d with no __file__ defined;
+# sys.argv[0] holds the script path there. Classic clusters set __file__ normally.
+_THIS_DIR = os.path.dirname(os.path.abspath(globals().get("__file__") or sys.argv[0]))
 sys.path.append(os.path.join(_THIS_DIR, "../../common"))
 sys.path.append(os.path.join(_THIS_DIR, "../../quality"))
-from audit import job_run, log_dataset_metrics  # noqa: E402
+from audit import current_run_id, job_run, log_dataset_metrics  # noqa: E402
 from config import get_config  # noqa: E402
 from reconciliation import assert_dedupe_rate_ok, assert_rows_conserved  # noqa: E402
 from volume import assert_volume_plausible, trailing_baseline  # noqa: E402
@@ -154,7 +156,9 @@ def read_source(spark: SparkSession, raw_path: str, spec: TableSpec) -> DataFram
         .schema(spec.schema)
         .load(f"{raw_path}/{spec.name}.csv")
         .withColumn("_bronze_ingested_at", F.current_timestamp())
-        .withColumn("_source_file", F.input_file_name())
+        # _metadata.file_path, not input_file_name(): the latter is unsupported under Unity
+        # Catalog (UC_COMMAND_NOT_SUPPORTED). Matches the streaming bronze reader.
+        .withColumn("_source_file", F.col("_metadata.file_path"))
         .withColumn("_batch_run_id", F.lit(_current_run_id(spark)))
     )
 
@@ -246,34 +250,32 @@ def merge_into_bronze(
     # Applied to both paths: MERGE rejects duplicate source rows loudly, but saveAsTable would
     # accept them silently and leave run 2's MERGE to crash on the mess.
     deduped = dedupe_on_keys(source, merge_keys)
-    # Cached because it is consumed twice -- once by this count, once by the write. Without it
-    # the dedupe window is recomputed, which is the most expensive step in this job.
-    deduped.cache()
+    # No .cache() here: PERSIST TABLE is rejected on serverless compute
+    # (NOT_SUPPORTED_WITH_SERVERLESS). The deduped frame is consumed twice -- the count below
+    # and the write -- so the dedupe window recomputes once; for a bounded nightly batch that
+    # is cheaper than being unrunnable on serverless.
     written_rows = deduped.count()
 
-    try:
-        if not spark.catalog.tableExists(target_table):
-            deduped.write.format("delta").saveAsTable(target_table)
-            return written_rows
-
-        target = DeltaTable.forName(spark, target_table)
-        condition = " AND ".join(f"target.{k} <=> source.{k}" for k in merge_keys)
-        (
-            target.alias("target")
-            .merge(deduped.alias("source"), condition)
-            .whenMatchedUpdateAll()
-            .whenNotMatchedInsertAll()
-            .execute()
-        )
+    if not spark.catalog.tableExists(target_table):
+        deduped.write.format("delta").saveAsTable(target_table)
         return written_rows
-    finally:
-        deduped.unpersist()
+
+    target = DeltaTable.forName(spark, target_table)
+    condition = " AND ".join(f"target.{k} <=> source.{k}" for k in merge_keys)
+    (
+        target.alias("target")
+        .merge(deduped.alias("source"), condition)
+        .whenMatchedUpdateAll()
+        .whenNotMatchedInsertAll()
+        .execute()
+    )
+    return written_rows
 
 
 def _current_run_id(spark: SparkSession) -> str:
-    # Databricks Workflows exposes the run id via a Spark conf set on the job cluster; falls
-    # back to "manual" for interactive/local runs so the column is never null.
-    return spark.conf.get("spark.databricks.job.runId", "manual")
+    # Delegates to the guarded reader in audit -- on serverless the conf.get raises rather
+    # than honouring its default, and "manual" is the right fallback for local/interactive.
+    return current_run_id(spark)
 
 
 def main():

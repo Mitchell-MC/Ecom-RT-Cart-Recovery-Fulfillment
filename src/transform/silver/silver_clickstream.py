@@ -19,7 +19,9 @@ import sys
 from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql import functions as F
 
-_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+# On a serverless spark_python_task the file is exec()'d with no __file__ defined;
+# sys.argv[0] holds the script path there. Classic clusters set __file__ normally.
+_THIS_DIR = os.path.dirname(os.path.abspath(globals().get("__file__") or sys.argv[0]))
 sys.path.append(os.path.join(_THIS_DIR, "../../common"))
 sys.path.append(os.path.join(_THIS_DIR, "../../quality"))
 from audit import job_run  # noqa: E402

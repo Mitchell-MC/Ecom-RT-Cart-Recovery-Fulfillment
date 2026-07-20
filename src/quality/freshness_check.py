@@ -20,7 +20,9 @@ import sys
 
 from pyspark.sql import SparkSession
 
-_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+# On a serverless spark_python_task the file is exec()'d with no __file__ defined;
+# sys.argv[0] holds the script path there. Classic clusters set __file__ normally.
+_THIS_DIR = os.path.dirname(os.path.abspath(globals().get("__file__") or sys.argv[0]))
 sys.path.append(os.path.join(_THIS_DIR, "../common"))
 from alerting import post_alert, run_url  # noqa: E402
 from config import get_config  # noqa: E402

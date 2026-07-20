@@ -18,7 +18,7 @@ import time
 from pyspark.sql import SparkSession
 
 sys.path.append(
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../common")
+    os.path.join(os.path.dirname(os.path.abspath(globals().get("__file__") or sys.argv[0])), "../../common")
 )
 from config import get_config  # noqa: E402
 

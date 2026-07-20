@@ -128,6 +128,19 @@ def _format_error(exc: BaseException, limit: int = 2000) -> str:
     return text[:limit]
 
 
+def current_run_id(spark) -> str:
+    """The Databricks job run id, or "manual" when it can't be read.
+
+    On serverless / Spark Connect, spark.conf.get raises CONFIG_NOT_AVAILABLE for a
+    non-allowlisted key even when a default is passed -- the default argument is not honoured
+    the way it is on a classic cluster -- so this is guarded rather than relying on it.
+    """
+    try:
+        return spark.conf.get("spark.databricks.job.runId", "manual")
+    except Exception:
+        return "manual"
+
+
 def _alert_failure(
     spark: SparkSession,
     cfg,
@@ -194,7 +207,7 @@ def log_run(
     error_message: str | None = None,
 ) -> None:
     audit_table = cfg.table("gold", "pipeline_audit_log")
-    run_id = spark.conf.get("spark.databricks.job.runId", "manual")
+    run_id = current_run_id(spark)
 
     row = spark.createDataFrame(
         [
@@ -268,7 +281,7 @@ def log_dataset_metrics(
     baseline the next run will be checked against.
     """
     metrics_table = cfg.table("gold", "dataset_metrics")
-    run_id = spark.conf.get("spark.databricks.job.runId", "manual")
+    run_id = current_run_id(spark)
 
     row = spark.createDataFrame(
         [
