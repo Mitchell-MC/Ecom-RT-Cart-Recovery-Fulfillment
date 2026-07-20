@@ -27,6 +27,7 @@ from config import get_config  # noqa: E402
 from dq_checks import (  # noqa: E402
     DQRule,
     apply_dq_rules,
+    assert_quarantine_rate_ok,
     dedupe_last_write_wins,
     within_clock_skew,
     write_quarantine,
@@ -119,9 +120,20 @@ def process_batch(
         )
 
     write_quarantine(quarantine_df, quarantine_table)
+
+    clean_count = deduped.count()
+    quarantined_count = quarantine_df.count()
     print(
-        f"batch {batch_id}: {deduped.count()} clean rows merged, "
-        f"{quarantine_df.count()} quarantined"
+        f"batch {batch_id}: {clean_count} clean rows merged, "
+        f"{quarantined_count} quarantined"
+    )
+    # Deliberately fail-stop rather than warn: a batch this bad means the event contract
+    # changed, and continuing would publish a filtered slice of reality while reporting health.
+    # This does stop the stream -- Databricks restarts it, hits the same batch (the checkpoint
+    # hasn't advanced), and gives up after max_retries: 3, which is the intended outcome: a
+    # stopped stream that has notified someone beats a running one quietly dropping most events.
+    assert_quarantine_rate_ok(
+        "silver.clickstream_events", clean_count, quarantined_count
     )
 
 

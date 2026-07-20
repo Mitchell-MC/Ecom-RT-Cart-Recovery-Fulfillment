@@ -92,6 +92,44 @@ def dedupe_last_write_wins(
     )
 
 
+class QuarantineRateExceeded(RuntimeError):
+    """Raised when so much of a batch failed DQ that the batch itself is suspect."""
+
+
+# A few bad rows are normal operation. A large fraction failing means something structural
+# changed -- an upstream rename, a unit change, a timezone shift -- and quarantining most of a
+# batch row-by-row is the pipeline reporting success while publishing a fraction of the data.
+MAX_QUARANTINE_RATE = 0.25
+MIN_ROWS_FOR_RATE_CHECK = 100
+
+
+def assert_quarantine_rate_ok(
+    dataset: str,
+    clean_count: int,
+    quarantined_count: int,
+    max_rate: float = MAX_QUARANTINE_RATE,
+    min_rows: int = MIN_ROWS_FOR_RATE_CHECK,
+) -> float:
+    """Return the quarantine rate, raising if it exceeds `max_rate` on a large enough batch.
+
+    Small batches are exempt: 2 bad rows out of 5 is a 40% rate and means nothing, and a check
+    that fires on those gets muted, taking the useful signal with it. Below `min_rows` the rate
+    is computed and returned for logging but never raises.
+    """
+    total = clean_count + quarantined_count
+    if total == 0:
+        return 0.0
+
+    rate = quarantined_count / total
+    if total >= min_rows and rate > max_rate:
+        raise QuarantineRateExceeded(
+            f"{dataset}: {quarantined_count}/{total} rows ({rate:.1%}) failed DQ, "
+            f"threshold {max_rate:.0%} -- treating this as a bad batch rather than "
+            f"publishing the {clean_count} rows that happened to pass"
+        )
+    return rate
+
+
 def write_quarantine(quarantine_df: DataFrame, target_table: str) -> None:
     if quarantine_df.head(1):
         (

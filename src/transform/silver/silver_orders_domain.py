@@ -24,7 +24,12 @@ sys.path.append(os.path.join(_THIS_DIR, "../../common"))
 sys.path.append(os.path.join(_THIS_DIR, "../../quality"))
 from audit import job_run  # noqa: E402
 from config import get_config  # noqa: E402
-from dq_checks import DQRule, apply_dq_rules, write_quarantine  # noqa: E402
+from dq_checks import (  # noqa: E402
+    DQRule,
+    apply_dq_rules,
+    assert_quarantine_rate_ok,
+    write_quarantine,
+)
 
 
 def _customers_standardize(df: DataFrame) -> DataFrame:
@@ -133,6 +138,11 @@ def process_table(
         clean_df, quarantine_df = apply_dq_rules(standardized, spec.dq_rules())
         write_quarantine(quarantine_df, quarantine_table)
         quarantined_count = quarantine_df.count()
+        # Checked after the quarantine write so the rows that triggered it are inspectable --
+        # raising first would leave nothing to diagnose from.
+        assert_quarantine_rate_ok(
+            f"silver.{spec.name}", clean_df.count(), quarantined_count
+        )
     else:
         clean_df, quarantined_count = standardized, 0
 
@@ -143,7 +153,9 @@ def process_table(
 
     merge_into_silver(spark, clean_df, silver_table, spec.merge_keys)
     row_count = clean_df.count()
-    print(f"silver.{spec.name}: {row_count} rows merged, {quarantined_count} quarantined")
+    print(
+        f"silver.{spec.name}: {row_count} rows merged, {quarantined_count} quarantined"
+    )
     return row_count, quarantined_count
 
 
