@@ -48,8 +48,7 @@ class Baseline:
     @property
     def usable(self) -> bool:
         return (
-            self.runs >= MIN_RUNS_FOR_BASELINE
-            and self.median_rows >= MIN_BASELINE_ROWS
+            self.runs >= MIN_RUNS_FOR_BASELINE and self.median_rows >= MIN_BASELINE_ROWS
         )
 
 

@@ -127,9 +127,7 @@ def merge_into_silver(
     )
 
 
-def process_table(
-    spark: SparkSession, cfg, spec: SilverTableSpec
-) -> tuple[int, int]:
+def process_table(spark: SparkSession, cfg, spec: SilverTableSpec) -> tuple[int, int]:
     """Returns (rows_merged, rows_quarantined) so main can total them for the audit row."""
     bronze_table = cfg.table("bronze", spec.name)
     silver_table = cfg.table("silver", spec.name)
