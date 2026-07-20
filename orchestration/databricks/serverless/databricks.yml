@@ -1,0 +1,87 @@
+# Serverless / Unity-Catalog variant of the pipeline, for a Default-Storage workspace that has
+# no ADLS and no Terraform-provisioned cluster policies (e.g. a multi-tenant Databricks trial).
+#
+# This is a deliberately separate, self-contained bundle rather than a target on the Azure bundle:
+# the Azure jobs pin Azure node types and Terraform cluster-policy ids, and bending those into
+# serverless via target overrides is more fragile than just declaring the serverless shape
+# directly. Both bundles deploy the SAME src/ Python -- only compute and storage differ.
+#
+# Prereqs (once): scripts/bootstrap_uc.sh <profile> <warehouse_id> creates the catalog/schemas/
+# volume, then upload the order-domain CSVs to /Volumes/ecom_dev/bronze/ops/bronze/raw/orders/.
+#
+# Deploy + run:
+#   databricks bundle deploy -t meridian -p meridian-dev
+#   databricks bundle run order_domain_ingest_serverless -t meridian -p meridian-dev
+bundle:
+  name: ecom-signal-platform-serverless
+
+# The src tree lives at the repo root, three levels up from this bundle dir. Mirrors how the
+# Azure bundle reaches it (one level shallower).
+sync:
+  paths:
+    - ../../../src
+
+variables:
+  catalog_env:
+    description: Drives catalog = ecom_{env}; must match the bootstrapped catalog.
+    default: dev
+
+targets:
+  meridian:
+    mode: development
+    default: true
+    # Literal host, not ${env.DATABRICKS_HOST}: auth fields are not interpolated, and hard-coding
+    # it lets `bundle validate/deploy -p <profile>` work with no env var to remember. This is the
+    # dev workspace behind the meridian-dev CLI profile.
+    workspace:
+      host: https://dbc-08add949-9c19.cloud.databricks.com
+    resources:
+      jobs:
+        order_domain_ingest_serverless:
+          name: "[serverless] order_domain_ingest"
+          # No schedule: this variant is run on demand to demonstrate the pipeline end to end.
+          tasks:
+            - task_key: bronze_orders_domain
+              spark_python_task:
+                python_file: ../../../src/ingestion/batch/bronze_orders_domain.py
+                # Params go on the task, not job-level `parameters:` -- Databricks does not
+                # forward job parameters into a spark_python_task's argv, and config.py reads
+                # argv. storage_backend=uc_volume swaps abfss:// paths for /Volumes.
+                parameters:
+                  - "--env=${var.catalog_env}"
+                  - "--storage_backend=uc_volume"
+              environment_key: default
+
+            - task_key: silver_orders_domain
+              depends_on:
+                - task_key: bronze_orders_domain
+              spark_python_task:
+                python_file: ../../../src/transform/silver/silver_orders_domain.py
+                parameters:
+                  - "--env=${var.catalog_env}"
+                  - "--storage_backend=uc_volume"
+              environment_key: default
+
+            # gold_fulfillment_risk depends only on the order-domain silver tables (orders,
+            # shipments, order_items, inventory) -- not on clickstream -- so it completes a full
+            # bronze->silver->gold slice from batch data alone, and exercises the live
+            # assert_upstream_fresh gate against silver's just-written watermark.
+            # gold_cart_recovery and gold_exec_summary need the streaming clickstream path and
+            # are intentionally not in this batch-only bundle.
+            - task_key: gold_fulfillment_risk
+              depends_on:
+                - task_key: silver_orders_domain
+              spark_python_task:
+                python_file: ../../../src/transform/gold/gold_fulfillment_risk.py
+                parameters:
+                  - "--env=${var.catalog_env}"
+                  - "--storage_backend=uc_volume"
+              environment_key: default
+
+          # Serverless compute for Python tasks: an environment the tasks attach to via
+          # environment_key. No node types, no policies, no ADLS -- the whole reason this variant
+          # exists.
+          environments:
+            - environment_key: default
+              spec:
+                client: "2"
