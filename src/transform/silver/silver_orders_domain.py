@@ -7,6 +7,7 @@ change to one entity doesn't ripple through every downstream consumer. Each tabl
 type/format standardization, the DQ contract from docs/metric-glossary.md where it applies, and
 an idempotent MERGE into silver on the same key used at bronze.
 """
+
 from __future__ import annotations
 
 import os
@@ -30,7 +31,9 @@ def _customers_standardize(df: DataFrame) -> DataFrame:
 
 
 def _products_standardize(df: DataFrame) -> DataFrame:
-    return df.withColumn("sku", F.upper(F.trim("sku"))).withColumn("category", F.lower("category"))
+    return df.withColumn("sku", F.upper(F.trim("sku"))).withColumn(
+        "category", F.lower("category")
+    )
 
 
 def _orders_standardize(df: DataFrame) -> DataFrame:
@@ -50,21 +53,29 @@ def _orders_dq_rules() -> list[DQRule]:
         # filters `promised_delivery_date IS NOT NULL` directly rather than reading this tag, so
         # the row still reaches silver for revenue/KPI purposes while fulfillment-risk scoring
         # waits for the field to be backfilled.
-        DQRule("missing_promised_delivery_date", "warn",
-               F.col("promised_delivery_date").isNull() & (F.col("status") != "cancelled")),
+        DQRule(
+            "missing_promised_delivery_date",
+            "warn",
+            F.col("promised_delivery_date").isNull() & (F.col("status") != "cancelled"),
+        ),
     ]
 
 
 def _order_items_dq_rules() -> list[DQRule]:
     return [
         DQRule("non_positive_qty", "fail", F.col("qty").isNull() | (F.col("qty") <= 0)),
-        DQRule("negative_unit_price", "fail",
-               F.col("unit_price").isNull() | (F.col("unit_price") < 0)),
+        DQRule(
+            "negative_unit_price",
+            "fail",
+            F.col("unit_price").isNull() | (F.col("unit_price") < 0),
+        ),
     ]
 
 
 def _products_dq_rules() -> list[DQRule]:
-    return [DQRule("negative_price", "fail", F.col("price").isNull() | (F.col("price") < 0))]
+    return [
+        DQRule("negative_price", "fail", F.col("price").isNull() | (F.col("price") < 0))
+    ]
 
 
 def _inventory_dq_rules() -> list[DQRule]:
@@ -89,15 +100,21 @@ TABLE_SPECS: list[SilverTableSpec] = [
 ]
 
 
-def merge_into_silver(spark: SparkSession, df: DataFrame, target_table: str,
-                       merge_keys: tuple[str, ...]) -> None:
+def merge_into_silver(
+    spark: SparkSession, df: DataFrame, target_table: str, merge_keys: tuple[str, ...]
+) -> None:
     if not spark.catalog.tableExists(target_table):
         df.write.format("delta").saveAsTable(target_table)
         return
     target = DeltaTable.forName(spark, target_table)
     condition = " AND ".join(f"target.{k} <=> source.{k}" for k in merge_keys)
-    (target.alias("target").merge(df.alias("source"), condition)
-     .whenMatchedUpdateAll().whenNotMatchedInsertAll().execute())
+    (
+        target.alias("target")
+        .merge(df.alias("source"), condition)
+        .whenMatchedUpdateAll()
+        .whenNotMatchedInsertAll()
+        .execute()
+    )
 
 
 def process_table(spark: SparkSession, cfg, spec: SilverTableSpec) -> None:
@@ -116,12 +133,15 @@ def process_table(spark: SparkSession, cfg, spec: SilverTableSpec) -> None:
         clean_df, quarantined_count = standardized, 0
 
     merge_into_silver(spark, clean_df, silver_table, spec.merge_keys)
-    print(f"silver.{spec.name}: {clean_df.count()} rows merged, {quarantined_count} quarantined")
+    print(
+        f"silver.{spec.name}: {clean_df.count()} rows merged, {quarantined_count} quarantined"
+    )
 
 
 def main():
     spark = SparkSession.builder.appName("silver_orders_domain").getOrCreate()
     from pyspark.dbutils import DBUtils
+
     dbutils = DBUtils(spark)
     cfg = get_config(dbutils)
 

@@ -4,10 +4,11 @@ generate_clickstream.py and generate_orders_domain.py each call build_customers(
 build_products() with the same --seed so customer_id and sku spaces line up across the two
 independently-generated datasets, without one script depending on the other's output file.
 """
+
 from __future__ import annotations
 
 import random
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from faker import Faker
 
@@ -56,7 +57,9 @@ def build_customers(n: int, seed: int) -> list[Customer]:
         customers.append(
             Customer(
                 customer_id=f"CUST{i:06d}",
-                first_seen_date=fake.date_between(start_date="-2y", end_date="-30d").isoformat(),
+                first_seen_date=fake.date_between(
+                    start_date="-2y", end_date="-30d"
+                ).isoformat(),
                 is_returning=rng.random() < 0.35,
                 home_tz_offset=rng.choice(US_TZ_OFFSETS),
             )

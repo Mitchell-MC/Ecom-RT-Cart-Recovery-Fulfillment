@@ -10,6 +10,7 @@ Partitioned by `event_date` (see docs/distributed-compute-notes.md for why date-
 beats no-partitioning here, and why we deliberately do NOT also partition by cart_id/customer_id
 -- cardinality is far too high and would produce a small-files problem).
 """
+
 from __future__ import annotations
 
 import os
@@ -22,9 +23,20 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(os.path.join(_THIS_DIR, "../../common"))
 sys.path.append(os.path.join(_THIS_DIR, "../../quality"))
 from config import get_config  # noqa: E402
-from dq_checks import DQRule, apply_dq_rules, dedupe_last_write_wins, within_clock_skew, write_quarantine  # noqa: E402
+from dq_checks import (  # noqa: E402
+    DQRule,
+    apply_dq_rules,
+    dedupe_last_write_wins,
+    within_clock_skew,
+    write_quarantine,
+)
 
-CART_EVENT_TYPES = ["add_to_cart", "remove_from_cart", "checkout_start", "checkout_complete"]
+CART_EVENT_TYPES = [
+    "add_to_cart",
+    "remove_from_cart",
+    "checkout_start",
+    "checkout_complete",
+]
 
 
 def build_dq_rules() -> list[DQRule]:
@@ -33,11 +45,18 @@ def build_dq_rules() -> list[DQRule]:
 
     return [
         DQRule("missing_session_id", "fail", F.col("session_id").isNull()),
-        DQRule("missing_cart_id_for_cart_event", "fail",
-               cart_id_required & F.col("cart_id").isNull()),
+        DQRule(
+            "missing_cart_id_for_cart_event",
+            "fail",
+            cart_id_required & F.col("cart_id").isNull(),
+        ),
         DQRule("invalid_event_timestamp", "fail", within_clock_skew("event_timestamp")),
-        DQRule("bad_price_at_event", "fail",
-               price_required & (F.col("price_at_event").isNull() | (F.col("price_at_event") < 0))),
+        DQRule(
+            "bad_price_at_event",
+            "fail",
+            price_required
+            & (F.col("price_at_event").isNull() | (F.col("price_at_event") < 0)),
+        ),
     ]
 
 
@@ -57,13 +76,23 @@ def dedupe(df: DataFrame) -> DataFrame:
     other_events = df.filter(F.col("cart_id").isNull())
 
     cart_deduped = dedupe_last_write_wins(
-        cart_events, ["cart_id", "event_type", "event_timestamp"], "producer_ingested_at")
-    other_deduped = dedupe_last_write_wins(other_events, ["event_id"], "producer_ingested_at")
+        cart_events,
+        ["cart_id", "event_type", "event_timestamp"],
+        "producer_ingested_at",
+    )
+    other_deduped = dedupe_last_write_wins(
+        other_events, ["event_id"], "producer_ingested_at"
+    )
     return cart_deduped.unionByName(other_deduped)
 
 
-def process_batch(batch_df: DataFrame, batch_id: int, spark: SparkSession, silver_table: str,
-                   quarantine_table: str) -> None:
+def process_batch(
+    batch_df: DataFrame,
+    batch_id: int,
+    spark: SparkSession,
+    silver_table: str,
+    quarantine_table: str,
+) -> None:
     if batch_df.isEmpty():
         return
 
@@ -73,22 +102,32 @@ def process_batch(batch_df: DataFrame, batch_id: int, spark: SparkSession, silve
 
     if spark.catalog.tableExists(silver_table):
         from delta.tables import DeltaTable
+
         target = DeltaTable.forName(spark, silver_table)
-        (target.alias("t")
-         .merge(deduped.alias("s"), "t.event_id = s.event_id")
-         .whenNotMatchedInsertAll()
-         .execute())
+        (
+            target.alias("t")
+            .merge(deduped.alias("s"), "t.event_id = s.event_id")
+            .whenNotMatchedInsertAll()
+            .execute()
+        )
     else:
-        (deduped.write.format("delta").partitionBy("event_date").saveAsTable(silver_table))
+        (
+            deduped.write.format("delta")
+            .partitionBy("event_date")
+            .saveAsTable(silver_table)
+        )
 
     write_quarantine(quarantine_df, quarantine_table)
-    print(f"batch {batch_id}: {deduped.count()} clean rows merged, "
-          f"{quarantine_df.count()} quarantined")
+    print(
+        f"batch {batch_id}: {deduped.count()} clean rows merged, "
+        f"{quarantine_df.count()} quarantined"
+    )
 
 
 def main():
     spark = SparkSession.builder.appName("silver_clickstream").getOrCreate()
     from pyspark.dbutils import DBUtils
+
     dbutils = DBUtils(spark)
     cfg = get_config(dbutils)
 
@@ -102,14 +141,17 @@ def main():
     checkpoint_path = cfg.checkpoint_path(storage_account, "clickstream_silver")
 
     stream = (
-        spark.readStream.format("delta").table(bronze_table)
+        spark.readStream.format("delta")
+        .table(bronze_table)
         .withWatermark("event_timestamp", "2 hours")
     )
 
     query = (
-        stream.writeStream
-        .foreachBatch(lambda df, batch_id: process_batch(df, batch_id, spark, silver_table,
-                                                           quarantine_table))
+        stream.writeStream.foreachBatch(
+            lambda df, batch_id: process_batch(
+                df, batch_id, spark, silver_table, quarantine_table
+            )
+        )
         .option("checkpointLocation", checkpoint_path)
         .trigger(processingTime="2 minutes")
         .start()

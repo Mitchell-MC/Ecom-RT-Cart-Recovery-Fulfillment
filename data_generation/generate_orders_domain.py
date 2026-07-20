@@ -14,6 +14,7 @@ Usage:
     python generate_orders_domain.py --out data_generation/output/orders --days 90 \
         --clickstream-manifest-dir data_generation/output/clickstream
 """
+
 from __future__ import annotations
 
 import argparse
@@ -43,23 +44,33 @@ def build_inventory(products, rng: random.Random) -> list[dict]:
     rows = []
     for p in products:
         backorder = rng.random() < 0.05
-        rows.append({
-            "sku": p.sku,
-            "warehouse_id": f"WH{rng.randint(1, 4)}",
-            "on_hand_qty": 0 if backorder else rng.randint(5, 500),
-            "backorder_flag": backorder,
-            "snapshot_date": datetime.now(timezone.utc).date().isoformat(),
-        })
+        rows.append(
+            {
+                "sku": p.sku,
+                "warehouse_id": f"WH{rng.randint(1, 4)}",
+                "on_hand_qty": 0 if backorder else rng.randint(5, 500),
+                "backorder_flag": backorder,
+                "snapshot_date": datetime.now(timezone.utc).date().isoformat(),
+            }
+        )
     return rows
 
 
-def build_shipment(order_created_at: datetime, now: datetime, rng: random.Random,
-                    force_late: bool | None = None):
+def build_shipment(
+    order_created_at: datetime,
+    now: datetime,
+    rng: random.Random,
+    force_late: bool | None = None,
+):
     carrier, avg_transit_days, late_rate_pct = pick_carrier(rng)
-    promised_delivery_date = (order_created_at + timedelta(days=avg_transit_days)).date()
+    promised_delivery_date = (
+        order_created_at + timedelta(days=avg_transit_days)
+    ).date()
     shipped_at = order_created_at + timedelta(hours=rng.randint(2, 36))
 
-    is_late = force_late if force_late is not None else (rng.random() * 100 < late_rate_pct)
+    is_late = (
+        force_late if force_late is not None else (rng.random() * 100 < late_rate_pct)
+    )
     if is_late:
         actual_transit_days = avg_transit_days + rng.randint(2, 6)
     else:
@@ -108,22 +119,27 @@ def main():
     parser.add_argument("--products", type=int, default=400)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--clickstream-manifest-dir", default=None)
-    parser.add_argument("--extra-orders-per-day", type=int, default=25,
-                         help="Orders/day with no clickstream trail (phone/CS channel)")
+    parser.add_argument(
+        "--extra-orders-per-day",
+        type=int,
+        default=25,
+        help="Orders/day with no clickstream trail (phone/CS channel)",
+    )
     parser.add_argument("--bad-row-rate", type=float, default=0.01)
     args = parser.parse_args()
 
     rng = random.Random(args.seed + 7)
     customers = build_customers(args.customers, args.seed)
     products = build_products(args.products, args.seed)
-    products_by_sku = {p.sku: p for p in products}
 
     out_root = Path(args.out)
     out_root.mkdir(parents=True, exist_ok=True)
     now = datetime.now(timezone.utc)
 
     if args.start_date:
-        start = datetime.strptime(args.start_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        start = datetime.strptime(args.start_date, "%Y-%m-%d").replace(
+            tzinfo=timezone.utc
+        )
     else:
         start = now - timedelta(days=args.days)
 
@@ -137,29 +153,57 @@ def main():
             if not cart_items:
                 continue
             order_id = f"ORD-{uuid.uuid4()}"
-            created_at = datetime.fromisoformat(sess["converted_at"]) + timedelta(minutes=rng.randint(1, 5))
+            created_at = datetime.fromisoformat(sess["converted_at"]) + timedelta(
+                minutes=rng.randint(1, 5)
+            )
             currency, fx_rate = pick_currency(rng)
-            order_total = sum(float(i["qty"]) * float(i["price_at_add"]) for i in cart_items)
+            order_total = sum(
+                float(i["qty"]) * float(i["price_at_add"]) for i in cart_items
+            )
             cancelled = rng.random() < 0.03
             ship = None if cancelled else build_shipment(created_at, now, rng)
 
-            orders.append({
-                "order_id": order_id, "customer_id": sess["customer_id"], "cart_id": sess["cart_id"],
-                "order_created_at": created_at.isoformat(), "channel": "web",
-                "currency": currency, "fx_rate_to_usd": fx_rate,
-                "order_total_usd": round(order_total * fx_rate, 2) if order_total >= 0 else order_total,
-                "status": "cancelled" if cancelled else ship["status"],
-                "promised_delivery_date": None if cancelled else ship["promised_delivery_date"],
-            })
+            orders.append(
+                {
+                    "order_id": order_id,
+                    "customer_id": sess["customer_id"],
+                    "cart_id": sess["cart_id"],
+                    "order_created_at": created_at.isoformat(),
+                    "channel": "web",
+                    "currency": currency,
+                    "fx_rate_to_usd": fx_rate,
+                    "order_total_usd": (
+                        round(order_total * fx_rate, 2)
+                        if order_total >= 0
+                        else order_total
+                    ),
+                    "status": "cancelled" if cancelled else ship["status"],
+                    "promised_delivery_date": (
+                        None if cancelled else ship["promised_delivery_date"]
+                    ),
+                }
+            )
             for item in cart_items:
-                order_items.append({
-                    "order_id": order_id, "sku": item["sku"], "qty": item["qty"],
-                    "unit_price": item["price_at_add"],
-                })
+                order_items.append(
+                    {
+                        "order_id": order_id,
+                        "sku": item["sku"],
+                        "qty": item["qty"],
+                        "unit_price": item["price_at_add"],
+                    }
+                )
             if ship:
-                shipments.append({"order_id": order_id, **{k: v for k, v in ship.items()
-                                                             if k not in ("promised_delivery_date",)},
-                                   "promised_delivery_date": ship["promised_delivery_date"]})
+                shipments.append(
+                    {
+                        "order_id": order_id,
+                        **{
+                            k: v
+                            for k, v in ship.items()
+                            if k not in ("promised_delivery_date",)
+                        },
+                        "promised_delivery_date": ship["promised_delivery_date"],
+                    }
+                )
 
     # --- standalone orders with no clickstream trail (phone / customer-service channel) ---
     for day_offset in range(args.days):
@@ -179,23 +223,47 @@ def main():
             cancelled = rng.random() < 0.03
             ship = None if cancelled else build_shipment(created_at, now, rng)
 
-            orders.append({
-                "order_id": order_id, "customer_id": customer.customer_id, "cart_id": None,
-                "order_created_at": created_at.isoformat(),
-                "channel": rng.choice(["phone", "customer_service"]),
-                "currency": currency, "fx_rate_to_usd": fx_rate,
-                "order_total_usd": round(-abs(order_total) if bad_row else order_total * fx_rate, 2),
-                "status": "cancelled" if cancelled else ship["status"],
-                "promised_delivery_date": None if (cancelled or bad_row) else ship["promised_delivery_date"],
-            })
+            orders.append(
+                {
+                    "order_id": order_id,
+                    "customer_id": customer.customer_id,
+                    "cart_id": None,
+                    "order_created_at": created_at.isoformat(),
+                    "channel": rng.choice(["phone", "customer_service"]),
+                    "currency": currency,
+                    "fx_rate_to_usd": fx_rate,
+                    "order_total_usd": round(
+                        -abs(order_total) if bad_row else order_total * fx_rate, 2
+                    ),
+                    "status": "cancelled" if cancelled else ship["status"],
+                    "promised_delivery_date": (
+                        None
+                        if (cancelled or bad_row)
+                        else ship["promised_delivery_date"]
+                    ),
+                }
+            )
             for p in chosen:
-                order_items.append({
-                    "order_id": order_id, "sku": p.sku, "qty": rng.randint(1, 3), "unit_price": p.price,
-                })
+                order_items.append(
+                    {
+                        "order_id": order_id,
+                        "sku": p.sku,
+                        "qty": rng.randint(1, 3),
+                        "unit_price": p.price,
+                    }
+                )
             if ship:
-                shipments.append({"order_id": order_id, **{k: v for k, v in ship.items()
-                                                             if k not in ("promised_delivery_date",)},
-                                   "promised_delivery_date": ship["promised_delivery_date"]})
+                shipments.append(
+                    {
+                        "order_id": order_id,
+                        **{
+                            k: v
+                            for k, v in ship.items()
+                            if k not in ("promised_delivery_date",)
+                        },
+                        "promised_delivery_date": ship["promised_delivery_date"],
+                    }
+                )
 
     def write_csv(name: str, rows: list[dict]):
         if not rows:
@@ -207,21 +275,40 @@ def main():
             writer.writerows(rows)
         print(f"  wrote {len(rows):>6} rows -> {path}")
 
-    write_csv("customers.csv", [{
-        "customer_id": c.customer_id, "first_seen_date": c.first_seen_date,
-        "is_returning": c.is_returning, "home_tz_offset": c.home_tz_offset,
-    } for c in customers])
-    write_csv("products.csv", [{
-        "sku": p.sku, "name": p.name, "category": p.category, "price": p.price,
-    } for p in products])
+    write_csv(
+        "customers.csv",
+        [
+            {
+                "customer_id": c.customer_id,
+                "first_seen_date": c.first_seen_date,
+                "is_returning": c.is_returning,
+                "home_tz_offset": c.home_tz_offset,
+            }
+            for c in customers
+        ],
+    )
+    write_csv(
+        "products.csv",
+        [
+            {
+                "sku": p.sku,
+                "name": p.name,
+                "category": p.category,
+                "price": p.price,
+            }
+            for p in products
+        ],
+    )
     write_csv("inventory.csv", build_inventory(products, rng))
     write_csv("orders.csv", orders)
     write_csv("order_items.csv", order_items)
     write_csv("shipments.csv", shipments)
 
-    print(f"Done. {len(orders)} orders "
-          f"({sum(1 for o in orders if o['cart_id'])} from clickstream, "
-          f"{sum(1 for o in orders if not o['cart_id'])} standalone) over {args.days} days.")
+    print(
+        f"Done. {len(orders)} orders "
+        f"({sum(1 for o in orders if o['cart_id'])} from clickstream, "
+        f"{sum(1 for o in orders if not o['cart_id'])} standalone) over {args.days} days."
+    )
 
 
 if __name__ == "__main__":

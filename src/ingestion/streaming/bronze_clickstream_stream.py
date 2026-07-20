@@ -13,6 +13,7 @@ boundary (src/quality/dq_checks.py), matching the contract in docs/metric-glossa
 Usage (as a Databricks job task):
     spark-submit bronze_clickstream_stream.py  # env + storage_suffix come from job parameters
 """
+
 from __future__ import annotations
 
 import os
@@ -20,29 +21,44 @@ import sys
 
 from pyspark.sql import SparkSession
 from pyspark.sql import functions as F
-from pyspark.sql.types import (DoubleType, IntegerType, StringType, StructField, StructType)
+from pyspark.sql.types import (
+    DoubleType,
+    IntegerType,
+    StringType,
+    StructField,
+    StructType,
+)
 
-sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../common"))
+sys.path.append(
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../common")
+)
 from config import get_config  # noqa: E402
 
-CLICKSTREAM_SCHEMA = StructType([
-    StructField("event_id", StringType(), False),
-    StructField("event_type", StringType(), False),
-    StructField("event_timestamp", StringType(), False),  # cast to timestamp after landing
-    StructField("session_id", StringType(), False),
-    StructField("customer_id", StringType(), True),
-    StructField("cart_id", StringType(), True),
-    StructField("device_type", StringType(), True),
-    StructField("_ingested_at", StringType(), True),  # producer-side timestamp, renamed below
-    StructField("page_type", StringType(), True),
-    StructField("sku", StringType(), True),
-    StructField("quantity", IntegerType(), True),
-    StructField("price_at_event", DoubleType(), True),
-])
+CLICKSTREAM_SCHEMA = StructType(
+    [
+        StructField("event_id", StringType(), False),
+        StructField("event_type", StringType(), False),
+        StructField(
+            "event_timestamp", StringType(), False
+        ),  # cast to timestamp after landing
+        StructField("session_id", StringType(), False),
+        StructField("customer_id", StringType(), True),
+        StructField("cart_id", StringType(), True),
+        StructField("device_type", StringType(), True),
+        StructField(
+            "_ingested_at", StringType(), True
+        ),  # producer-side timestamp, renamed below
+        StructField("page_type", StringType(), True),
+        StructField("sku", StringType(), True),
+        StructField("quantity", IntegerType(), True),
+        StructField("price_at_event", DoubleType(), True),
+    ]
+)
 
 
-def build_stream(spark: SparkSession, raw_path: str, checkpoint_path: str,
-                  schema_location: str):
+def build_stream(
+    spark: SparkSession, raw_path: str, checkpoint_path: str, schema_location: str
+):
     raw = (
         spark.readStream.format("cloudFiles")
         .option("cloudFiles.format", "json")
@@ -54,8 +70,7 @@ def build_stream(spark: SparkSession, raw_path: str, checkpoint_path: str,
     )
 
     bronze = (
-        raw
-        .withColumnRenamed("_ingested_at", "producer_ingested_at")
+        raw.withColumnRenamed("_ingested_at", "producer_ingested_at")
         .withColumn("event_timestamp", F.to_timestamp("event_timestamp"))
         .withColumn("producer_ingested_at", F.to_timestamp("producer_ingested_at"))
         .withColumn("_bronze_ingested_at", F.current_timestamp())
@@ -81,7 +96,9 @@ def main():
 
     query = (
         build_stream(spark, raw_path, checkpoint_path, schema_location)
-        .trigger(processingTime="1 minute")  # continuous micro-batch, targets the <5min bronze SLA
+        .trigger(
+            processingTime="1 minute"
+        )  # continuous micro-batch, targets the <5min bronze SLA
         .outputMode("append")
         .toTable(target_table)
     )
@@ -90,6 +107,7 @@ def main():
 
 def _get_dbutils(spark: SparkSession):
     from pyspark.dbutils import DBUtils  # available on Databricks Runtime
+
     return DBUtils(spark)
 
 

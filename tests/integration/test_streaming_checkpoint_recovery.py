@@ -13,6 +13,7 @@ own job. The real bronze job's Autoloader (``cloudFiles``) source can't run loca
 the source here is a plain Delta table the test appends to between rounds -- the
 checkpoint and exactly-once behaviour under test are identical.
 """
+
 import uuid
 from datetime import datetime, timezone
 

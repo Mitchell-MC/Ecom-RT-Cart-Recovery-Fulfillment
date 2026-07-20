@@ -58,9 +58,12 @@ def test_score_carts_gives_higher_loyalty_score_to_returning_customers(spark):
     events = _events_df(spark)
     abandoned = filter_abandoned(aggregate_carts(events))
 
-    orders = spark.createDataFrame([
-        {"customer_id": "CUST1", "status": "delivered"},
-    ], schema="customer_id string, status string")
+    orders = spark.createDataFrame(
+        [
+            {"customer_id": "CUST1", "status": "delivered"},
+        ],
+        schema="customer_id string, status string",
+    )
 
     scored = score_carts(abandoned, orders)
     row = scored.filter("cart_id = 'cart-A'").collect()[0]

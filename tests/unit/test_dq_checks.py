@@ -1,15 +1,22 @@
 from datetime import datetime, timedelta, timezone
 
-from dq_checks import DQRule, apply_dq_rules, dedupe_last_write_wins, non_negative, not_null, within_clock_skew
+from dq_checks import (
+    DQRule,
+    apply_dq_rules,
+    dedupe_last_write_wins,
+    non_negative,
+    not_null,
+    within_clock_skew,
+)
 
 
 def test_apply_dq_rules_splits_clean_and_quarantine(spark):
     now = datetime.now(timezone.utc)
     rows = [
         {"id": "1", "price": 10.0, "ts": now},
-        {"id": "2", "price": None, "ts": now},                        # fails not_null
-        {"id": "3", "price": -5.0, "ts": now},                        # fails non_negative
-        {"id": "4", "price": 10.0, "ts": now + timedelta(days=2)},    # fails clock skew
+        {"id": "2", "price": None, "ts": now},  # fails not_null
+        {"id": "3", "price": -5.0, "ts": now},  # fails non_negative
+        {"id": "4", "price": 10.0, "ts": now + timedelta(days=2)},  # fails clock skew
     ]
     df = spark.createDataFrame(rows)
 
@@ -24,7 +31,9 @@ def test_apply_dq_rules_splits_clean_and_quarantine(spark):
     assert quarantine_df.count() == 3
     assert clean_df.collect()[0]["id"] == "1"
 
-    reasons = {row["id"]: set(row["_dq_fail_reasons"]) for row in quarantine_df.collect()}
+    reasons = {
+        row["id"]: set(row["_dq_fail_reasons"]) for row in quarantine_df.collect()
+    }
     assert reasons["2"] == {"missing_price"}
     assert reasons["3"] == {"negative_price"}
     assert reasons["4"] == {"bad_timestamp"}

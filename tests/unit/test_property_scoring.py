@@ -12,6 +12,7 @@ Each hypothesis example builds a small Spark DataFrame and runs the real transfo
 runtime is dominated by Spark job startup, so max_examples is kept low and the
 per-example deadline is disabled (Spark latency is too variable for the default).
 """
+
 from datetime import date, datetime, timedelta, timezone
 
 from hypothesis import HealthCheck, given, settings

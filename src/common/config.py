@@ -5,6 +5,7 @@ Every job reads its environment from a Databricks job-parameter widget named `en
 them. Table/path naming here must match infra/terraform/modules/unity-catalog (catalog =
 "ecom_{env}", schemas bronze/silver/gold) and infra/terraform/modules/storage (container URLs).
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass

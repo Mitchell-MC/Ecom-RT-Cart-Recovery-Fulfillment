@@ -6,6 +6,7 @@ Delta table for later inspection/backfill); `warn` rules keep the row in silver 
 `_dq_warnings` so downstream gold logic can choose to exclude it (e.g. fulfillment_risk excludes
 orders warned for missing promised_delivery_date rather than guessing a promise date).
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -35,33 +36,50 @@ def non_negative(col: str) -> Column:
 
 def within_clock_skew(col: str, past_days: int = 1, future_minutes: int = 5) -> Column:
     too_old = F.col(col) < F.expr(f"current_timestamp() - INTERVAL {past_days} DAYS")
-    too_new = F.col(col) > F.expr(f"current_timestamp() + INTERVAL {future_minutes} MINUTES")
+    too_new = F.col(col) > F.expr(
+        f"current_timestamp() + INTERVAL {future_minutes} MINUTES"
+    )
     return F.col(col).isNull() | too_old | too_new
 
 
 def apply_dq_rules(df: DataFrame, rules: list[DQRule]) -> tuple[DataFrame, DataFrame]:
     """Returns (clean_df, quarantine_df). `clean_df` carries a `_dq_warnings` array column
-    (empty array if no warn-level rule fired); `quarantine_df` carries `_dq_fail_reasons`."""
+    (empty array if no warn-level rule fired); `quarantine_df` carries `_dq_fail_reasons`.
+    """
     fail_rules = [r for r in rules if r.severity == "fail"]
     warn_rules = [r for r in rules if r.severity == "warn"]
 
-    fail_condition = reduce(lambda a, b: a | b, [r.condition for r in fail_rules], F.lit(False))
-    fail_reasons = F.array_compact(F.array(*[
-        F.when(r.condition, F.lit(r.name)) for r in fail_rules
-    ])) if fail_rules else F.array().cast("array<string>")
+    fail_condition = reduce(
+        lambda a, b: a | b, [r.condition for r in fail_rules], F.lit(False)
+    )
+    fail_reasons = (
+        F.array_compact(
+            F.array(*[F.when(r.condition, F.lit(r.name)) for r in fail_rules])
+        )
+        if fail_rules
+        else F.array().cast("array<string>")
+    )
 
-    warn_reasons = F.array_compact(F.array(*[
-        F.when(r.condition, F.lit(r.name)) for r in warn_rules
-    ])) if warn_rules else F.array().cast("array<string>")
+    warn_reasons = (
+        F.array_compact(
+            F.array(*[F.when(r.condition, F.lit(r.name)) for r in warn_rules])
+        )
+        if warn_rules
+        else F.array().cast("array<string>")
+    )
 
-    tagged = df.withColumn("_dq_fail_reasons", fail_reasons).withColumn("_dq_warnings", warn_reasons)
+    tagged = df.withColumn("_dq_fail_reasons", fail_reasons).withColumn(
+        "_dq_warnings", warn_reasons
+    )
 
     quarantine_df = tagged.filter(fail_condition).drop("_dq_warnings")
     clean_df = tagged.filter(~fail_condition).drop("_dq_fail_reasons")
     return clean_df, quarantine_df
 
 
-def dedupe_last_write_wins(df: DataFrame, key_cols: list[str], order_col: str) -> DataFrame:
+def dedupe_last_write_wins(
+    df: DataFrame, key_cols: list[str], order_col: str
+) -> DataFrame:
     """Collapses duplicate (key_cols) rows, keeping the one with the max order_col --
     used for producer-retry duplicates (see docs/metric-glossary.md dedup rule)."""
     from pyspark.sql.window import Window
@@ -76,6 +94,9 @@ def dedupe_last_write_wins(df: DataFrame, key_cols: list[str], order_col: str) -
 
 def write_quarantine(quarantine_df: DataFrame, target_table: str) -> None:
     if quarantine_df.head(1):
-        (quarantine_df
-         .withColumn("_quarantined_at", F.current_timestamp())
-         .write.format("delta").mode("append").saveAsTable(target_table))
+        (
+            quarantine_df.withColumn("_quarantined_at", F.current_timestamp())
+            .write.format("delta")
+            .mode("append")
+            .saveAsTable(target_table)
+        )
