@@ -180,8 +180,16 @@ def test_fulfillment_scores_stay_in_0_100(spark, rows):
 def test_time_pressure_nonincreasing_as_promise_moves_out(spark, offsets):
     # Carrier transit is fixed, so time_pressure_score depends only on days_to_promise;
     # a later promise date means fewer days of pressure, never more.
+    # total is held constant: it feeds delayed-revenue exposure, not time_pressure_score,
+    # so fixing it leaves days_to_promise as the only variable across these rows.
     rows = [
-        {"offset": o, "avg_transit": 5, "backorder": False, "late_rate": 0.0}
+        {
+            "total": 100.0,
+            "offset": o,
+            "avg_transit": 5,
+            "backorder": False,
+            "late_rate": 0.0,
+        }
         for o in offsets
     ]
     scored = score(_fulfillment_df(spark, rows)).collect()

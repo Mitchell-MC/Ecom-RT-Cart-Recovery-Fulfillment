@@ -8,6 +8,7 @@ from dq_checks import (
     not_null,
     within_clock_skew,
 )
+from pyspark.sql.types import DoubleType, StringType, StructField, StructType
 
 
 def test_apply_dq_rules_splits_clean_and_quarantine(spark):
@@ -40,7 +41,11 @@ def test_apply_dq_rules_splits_clean_and_quarantine(spark):
 
 
 def test_apply_dq_rules_warn_does_not_quarantine(spark):
-    df = spark.createDataFrame([{"id": "1", "value": None}])
+    # `value` is null in the only row, so Spark cannot infer its type -- state it explicitly.
+    schema = StructType(
+        [StructField("id", StringType()), StructField("value", DoubleType())]
+    )
+    df = spark.createDataFrame([{"id": "1", "value": None}], schema=schema)
     rules = [DQRule("missing_value", "warn", not_null("value"))]
     clean_df, quarantine_df = apply_dq_rules(df, rules)
 

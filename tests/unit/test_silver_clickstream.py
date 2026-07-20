@@ -1,8 +1,25 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
+from pyspark.sql.types import StringType, StructField, StructType, TimestampType
 from silver_clickstream import dedupe, standardize
 
+# cart_id is null in every row of the non-cart-event tests, so Spark has no value to infer a
+# type from and createDataFrame raises CANNOT_DETERMINE_TYPE. State the schema explicitly.
+EVENT_SCHEMA = StructType(
+    [
+        StructField("event_id", StringType()),
+        StructField("cart_id", StringType()),
+        StructField("event_type", StringType()),
+        StructField("event_timestamp", TimestampType()),
+        StructField("producer_ingested_at", TimestampType()),
+    ]
+)
+
 NOW = datetime.now(timezone.utc)
+# dedupe() breaks ties on producer_ingested_at; a retry is by definition ingested after the
+# first attempt, so give it a strictly later value. Equal timestamps make row_number()
+# pick arbitrarily and the assertion below only passes by luck.
+LATER = NOW + timedelta(seconds=30)
 
 
 def test_standardize_normalizes_case_and_derives_event_date(spark):
@@ -38,7 +55,7 @@ def test_dedupe_cart_events_on_business_key_last_write_wins(spark):
             "cart_id": "cart-1",
             "event_type": "add_to_cart",
             "event_timestamp": NOW,
-            "producer_ingested_at": NOW,
+            "producer_ingested_at": LATER,
             "attempt": "retry",
         },
     ]
@@ -73,7 +90,7 @@ def test_dedupe_non_cart_events_on_event_id(spark):
             "producer_ingested_at": NOW,
         },
     ]
-    df = spark.createDataFrame(rows)
+    df = spark.createDataFrame(rows, schema=EVENT_SCHEMA)
     result = dedupe(df).collect()
 
     assert {row["event_id"] for row in result} == {"e1", "e2"}
