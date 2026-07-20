@@ -3,6 +3,10 @@ name: CI
 on:
   pull_request:
     branches: [main]
+  # Also run on direct pushes to main so the branch always has a current test result
+  # (and so the README status badge reflects main, not just the last PR).
+  push:
+    branches: [main]
 
 jobs:
   lint:

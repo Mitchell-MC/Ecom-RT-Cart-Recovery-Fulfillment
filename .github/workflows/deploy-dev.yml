@@ -12,6 +12,12 @@ jobs:
   terraform-apply:
     runs-on: ubuntu-latest
     environment: dev
+    # Skip (rather than fail) when no Azure subscription is wired up to this repo. Deploying
+    # needs OIDC vars that only exist in a real dev environment; without them azure/login errors
+    # out and every push to main goes red. A skipped job leaves the run neutral instead, so a
+    # clone/fork with no cloud account attached still shows an honest, passing history.
+    # `bundle-deploy` needs: this job, so it skips too.
+    if: vars.AZURE_CLIENT_ID != ''
     defaults:
       run:
         working-directory: infra/terraform/env/dev
