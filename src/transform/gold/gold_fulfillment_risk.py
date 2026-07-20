@@ -1,6 +1,6 @@
 """gold.fulfillment_risk_signal -- one row per open (in-transit, not cancelled) order, ranked by
 docs/metric-glossary.md's fulfillment_risk_score. Batch job, scheduled every 4 hours (see
-orchestration/databricks/resources/gold_job.yml).
+orchestration/databricks/resources/gold_jobs.yml).
 """
 
 from __future__ import annotations
@@ -123,9 +123,7 @@ def main():
 
         open_orders = open_orders_with_shipment(orders, shipments)
         with_inventory = with_inventory_risk(open_orders, order_items, inventory)
-        scored = score(with_inventory).withColumn(
-            "_gold_computed_at", F.current_timestamp()
-        )
+        scored = score(with_inventory)
 
         scored.write.format("delta").mode("overwrite").option(
             "overwriteSchema", "true"

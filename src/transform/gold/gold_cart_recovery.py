@@ -1,6 +1,6 @@
 """gold.cart_recovery_signal -- one row per currently-abandoned cart, ranked by
 docs/metric-glossary.md's priority_score. Batch job, scheduled hourly (see
-orchestration/databricks/resources/gold_job.yml), reading the streaming-fed silver.clickstream_
+orchestration/databricks/resources/gold_jobs.yml), reading the streaming-fed silver.clickstream_
 events table plus silver.orders for customer purchase history.
 """
 
@@ -169,7 +169,6 @@ def main():
         abandoned = filter_abandoned(cart_agg)
         scored = score_carts(abandoned, orders)
 
-        scored = scored.withColumn("_gold_computed_at", F.current_timestamp())
         scored.write.format("delta").mode("overwrite").option(
             "overwriteSchema", "true"
         ).saveAsTable(target_table)

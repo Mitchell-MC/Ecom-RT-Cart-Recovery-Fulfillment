@@ -56,7 +56,7 @@ Streaming micro-batches (bronze: every 1 min) naturally produce many small files
 enabled on every bronze/silver table (set at table-creation time in the ingestion jobs) so
 compaction happens incrementally rather than requiring a separate maintenance job — the
 `main_pipeline` Workflow additionally runs a nightly `OPTIMIZE ... ZORDER BY (...)` task (see
-`orchestration/databricks/resources/gold_job.yml`) for the columns the benchmark below justifies.
+`orchestration/databricks/resources/gold_jobs.yml`) for the columns the benchmark below justifies.
 
 ## 5. Benchmark: partition-only vs. partition + Z-ORDER
 

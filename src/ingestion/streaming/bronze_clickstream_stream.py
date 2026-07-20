@@ -1,7 +1,7 @@
 """Structured Streaming ingestion: raw clickstream JSON -> bronze.clickstream_events.
 
 Runs as a continuous Databricks Workflow job (see orchestration/databricks/resources/
-bronze_job.yml) on the `streaming` cluster policy (autotermination disabled -- this task is
+streaming_jobs.yml) on the `streaming` cluster policy (autotermination disabled -- this task is
 meant to run 24/7 and be restarted by the Workflow on failure, not to complete and shut down).
 
 Bronze is a landing zone, not a quality gate: rows are never dropped here. Autoloader's
