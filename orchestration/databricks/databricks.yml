@@ -34,6 +34,11 @@ variables:
     default: 15.4.x-scala2.12
   pipeline_service_principal_app_id:
     description: From `terraform output pipeline_application_id`; owns staging job runs
+  alert_email:
+    description: >-
+      Address receiving on_failure / SLA-breach notifications for every job. Required: a job
+      whose failure notifies nobody is indistinguishable from a job that succeeded, which is
+      how a pipeline stays broken for days (see docs/runbook.md).
 
 targets:
   dev:

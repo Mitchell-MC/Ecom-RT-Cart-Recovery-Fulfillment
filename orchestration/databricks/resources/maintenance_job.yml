@@ -8,6 +8,18 @@ resources:
       schedule:
         quartz_cron_expression: "0 0 3 * * ?" # daily, 03:00 UTC (off-peak, ahead of the 06:00 exec summary run)
         timezone_id: UTC
+      email_notifications:
+        on_failure:
+          - ${var.alert_email}
+        on_duration_warning_threshold_exceeded:
+          - ${var.alert_email}
+      # Silent VACUUM/OPTIMIZE failure degrades slowly rather than breaking anything, so it is
+      # the easiest job here to leave broken for months without noticing.
+      health:
+        rules:
+          - metric: RUN_DURATION_SECONDS
+            op: GREATER_THAN
+            value: 1200
       tasks:
         - task_key: run
           sql_task:

@@ -9,6 +9,18 @@ resources:
       schedule:
         quartz_cron_expression: "0 0 * * * ?" # hourly, on the hour
         timezone_id: UTC
+      email_notifications:
+        on_failure:
+          - ${var.alert_email}
+        on_duration_warning_threshold_exceeded:
+          - ${var.alert_email}
+      # A run that outlives its own cadence is the early signal for a job that will later hang
+      # outright; on_failure never fires for a hang, so duration is the only warning available.
+      health:
+        rules:
+          - metric: RUN_DURATION_SECONDS
+            op: GREATER_THAN
+            value: 600
       parameters:
         - name: env
           default: ${var.environment}
@@ -36,6 +48,16 @@ resources:
       schedule:
         quartz_cron_expression: "0 0 */4 * * ?" # every 4 hours
         timezone_id: UTC
+      email_notifications:
+        on_failure:
+          - ${var.alert_email}
+        on_duration_warning_threshold_exceeded:
+          - ${var.alert_email}
+      health:
+        rules:
+          - metric: RUN_DURATION_SECONDS
+            op: GREATER_THAN
+            value: 600
       parameters:
         - name: env
           default: ${var.environment}
@@ -63,6 +85,16 @@ resources:
       schedule:
         quartz_cron_expression: "0 0 6 * * ?" # daily, 06:00 UTC
         timezone_id: UTC
+      email_notifications:
+        on_failure:
+          - ${var.alert_email}
+        on_duration_warning_threshold_exceeded:
+          - ${var.alert_email}
+      health:
+        rules:
+          - metric: RUN_DURATION_SECONDS
+            op: GREATER_THAN
+            value: 450
       parameters:
         - name: env
           default: ${var.environment}

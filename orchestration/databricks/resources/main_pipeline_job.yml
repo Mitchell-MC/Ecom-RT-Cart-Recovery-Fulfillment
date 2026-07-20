@@ -7,6 +7,12 @@ resources:
   jobs:
     main_pipeline:
       name: "[${bundle.target}] main_pipeline (manual/demo)"
+      # No health rule: this job's duration is just the sum of its children's, each of which has
+      # its own. on_failure still matters -- a backfill kicked off and walked away from is
+      # unattended in exactly the way the scheduled jobs are.
+      email_notifications:
+        on_failure:
+          - ${var.alert_email}
       tasks:
         - task_key: order_domain_ingest
           run_job_task:
