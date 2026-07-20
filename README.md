@@ -52,8 +52,10 @@ and scope boundaries.
                                                     Power BI ROI dashboard
 
   Orchestration: Databricks Workflows (primary) — src jobs run as tasks with
-  retries/timeouts/SLAs. Airflow DAG (orchestration/airflow) mirrors the same
-  dependency graph as a stretch/alternate orchestrator.
+  retries/timeouts/SLAs, failure + health notifications, and a standalone
+  freshness monitor that catches jobs which never ran. Airflow DAG
+  (orchestration/airflow) mirrors the same dependency graph as a
+  stretch/alternate orchestrator.
 
   IaC: Terraform provisions the workspace-level objects (Unity Catalog
   catalog/schemas, cluster policies, secret scopes, job/pipeline permissions)
@@ -67,20 +69,48 @@ Full write-up: [docs/architecture.md](docs/architecture.md). Distributed-compute
 (partitioning, shuffle, streaming trigger intervals, layout benchmarks):
 [docs/distributed-compute-notes.md](docs/distributed-compute-notes.md).
 
+## Failing loudly
+
+The design goal for the pipeline's failure behaviour is that no bad outcome is silent. A pipeline
+that fails visibly gets fixed in an hour; one that fails silently gets discovered by whoever is
+reading the dashboard, days later, usually at month-end. Every control below exists because
+something specific could otherwise go wrong while every job stayed green.
+
+| Failure mode | What catches it |
+|---|---|
+| Job crashes | `on_failure` notification + a `status='failed'` row in `gold.pipeline_audit_log` |
+| Job hangs | `RUN_DURATION_SECONDS` health rule (a hang never fires `on_failure`) |
+| Stream alive but falling behind | `STREAMING_BACKLOG_SECONDS` health rule |
+| Job never runs at all | `freshness_check` job, every 15 min — nothing inside a run can detect this |
+| Consumer builds on stale upstream | `assert_upstream_fresh` before each gold publish |
+| Truncated or duplicated extract | volume band vs. the dataset's own trailing median |
+| Rows silently disappearing | row-conservation reconciliation: `source == written + deduped + quarantined` |
+| Upstream contract change | `enforceSchema` on read, quarantine-rate ceiling, strict gold schemas |
+| Duplicate source rows | dedupe before both write paths + a dedupe-rate ceiling |
+
+Alerts carry business impact, the last known-good run, the owning team, and the upstream system
+most likely responsible — `Job X failed` is a notification, not an alert. Two observability
+tables back this: `gold.pipeline_audit_log` (one row per run) and `gold.dataset_metrics` (one row
+per dataset per run, which also supplies the volume baselines).
+
+When something does break: [docs/runbook.md](docs/runbook.md).
+
 ## Repo layout
 
 ```
-docs/                   Charter, metric glossary, architecture, tradeoffs, demo scripts
+docs/                   Charter, metric glossary, architecture, tradeoffs, demo scripts,
+                        incident runbook, schema migrations
 infra/terraform/        Modules + dev/staging environments (Azure Databricks + Unity Catalog)
 data_generation/        Synthetic clickstream + order-domain data generators
+src/common/             Config resolution, run audit log, Slack alerting
 src/ingestion/          Bronze layer: Structured Streaming (clickstream) + batch (order domain)
 src/transform/silver/   Standardization, dedup, keying
 src/transform/gold/     Cart-recovery signal, fulfillment-risk signal, exec summary marts
-src/quality/            Data quality contracts and checks
+src/quality/            DQ contracts, freshness gates, volume + row-count reconciliation
 orchestration/databricks/  Databricks Asset Bundle + Workflow job definitions
 orchestration/airflow/     Stretch: Airflow DAG mirroring the same pipeline
 .github/workflows/      CI (lint/test), deploy-dev, promote-staging
-tests/                  Unit tests for silver/gold logic and DQ checks
+tests/                  Unit tests for transforms, DQ, and the reliability controls
 bi/powerbi/             Data model, DAX measures, and report layout for the ROI dashboard
 ```
 
@@ -108,16 +138,35 @@ cd infra/terraform/env/dev
 terraform init
 terraform apply -var-file=terraform.tfvars   # copy terraform.tfvars.example first
 
-# 3. Deploy jobs via Databricks Asset Bundle
+# 3. (Optional) Slack alerting. Without this, jobs run normally and alerts
+#    degrade to a driver-log line -- nothing breaks, so dev can skip it.
+databricks secrets create-scope ecom
+databricks secrets put-secret ecom slack_webhook_url
+
+# 4. Deploy jobs via Databricks Asset Bundle
 cd ../../../../orchestration/databricks
-databricks bundle deploy -t dev
+# alert_email has no default on purpose: a job whose failure notifies nobody is
+# indistinguishable from one that succeeded.
+databricks bundle deploy -t dev --var alert_email=you@example.com
 databricks bundle run -t dev main_pipeline
 
-# 4. Point Power BI at the gold schema per bi/powerbi/data-model.md
+# 5. Point Power BI at the gold schema per bi/powerbi/data-model.md
 ```
+
+Deploying to an environment that **already holds data** needs the schema migrations in
+[docs/migrations.md](docs/migrations.md) applied first — gold tables are written without
+`overwriteSchema` and silver is MERGEd without `autoMerge`, so a schema change is deliberate
+rather than something a job does to itself at 3am. A brand-new environment needs nothing.
 
 ## Talking points
 
 If you're using this repo for interviews, start with
 [docs/star-talking-points.md](docs/star-talking-points.md) and the two demo scripts in `docs/`
 (10-minute and 30-minute variants).
+
+For the "walk me through a pipeline that failed silently" question, the material is the failure
+table above plus [docs/runbook.md](docs/runbook.md) — specifically the ordering it argues for:
+establish blast radius before touching anything, contain before reconstructing, communicate
+before you have the full picture, and judge the monitoring rather than the bug in the
+post-mortem. The commit history on the reliability work is deliberately written to explain *what
+would have gone wrong*, not just what changed.
