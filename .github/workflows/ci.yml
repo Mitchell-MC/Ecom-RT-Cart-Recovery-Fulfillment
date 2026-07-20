@@ -28,12 +28,35 @@ jobs:
         with:
           python-version: "3.11"
       - run: pip install -r tests/requirements.txt
-      - run: pytest tests/unit --junitxml=test-results.xml
+      - run: pytest tests/unit --cov=src --cov-report=term-missing --cov-report=xml --junitxml=test-results.xml
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: unit-test-results
-          path: test-results.xml
+          path: |
+            test-results.xml
+            coverage.xml
+
+  integration-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17" # required by PySpark/Delta at test time; this repo has no JVM locally
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r tests/requirements.txt
+      # Deselected from the unit job by the `-m 'not integration'` default in pyproject.toml;
+      # run here explicitly. No --cov: the coverage floor is enforced by the unit job only.
+      - run: pytest tests/integration -m integration --junitxml=integration-results.xml
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: integration-test-results
+          path: integration-results.xml
 
   data-generation-smoke-test:
     runs-on: ubuntu-latest

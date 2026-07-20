@@ -8,8 +8,15 @@ venv/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.hypothesis/
 htmlcov/
 .coverage
+coverage.xml
+
+# Local Spark test artifacts (managed tables + Hive metastore the test session creates)
+spark-warehouse/
+metastore_db/
+derby.log
 
 # Terraform
 **/.terraform/

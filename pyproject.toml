@@ -1,0 +1,40 @@
+# Test + coverage configuration. Ruff/black have no sections here, so they keep their
+# CI defaults; this file only configures pytest and coverage.py.
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+# Integration tests need a real local Spark+Delta session and are slower, so they are
+# deselected by default. CI runs them in a dedicated job (see .github/workflows/ci.yml):
+#   pytest tests/integration -m integration
+addopts = "-m 'not integration'"
+markers = [
+  "integration: needs a real local Spark+Delta session; slower, deselected by default",
+]
+
+[tool.coverage.run]
+branch = true
+source = ["src"]
+omit = [
+  # Databricks-runtime-only entrypoints -- Autoloader (cloudFiles) and the manual
+  # OPTIMIZE ZORDER benchmark can't run in a local Spark session, so they're not
+  # measurable in CI unit tests. Their logic is exercised on Databricks.
+  "src/ingestion/streaming/bronze_clickstream_stream.py",
+  "src/transform/silver/benchmark_layout.py",
+]
+
+[tool.coverage.report]
+show_missing = true
+# main() bodies wire up dbutils/awaitTermination and aren't unit-testable; exclude them
+# so the percentage reflects testable transform/quality logic, not orchestration glue.
+exclude_lines = [
+  'pragma: no cover',
+  'if __name__ == .__main__.:',
+  'def main\(',
+  'raise NotImplementedError',
+]
+# Provisional floor. This repo has no local JVM, so the true coverage number is first
+# observable on CI (see the term-missing report + coverage.xml artifact in the unit-tests
+# job). Set deliberately low to avoid a spurious first-run failure; read the real number
+# off that run and ratchet this one line up toward 60+ as the P0/P1 tests land.
+fail_under = 30
