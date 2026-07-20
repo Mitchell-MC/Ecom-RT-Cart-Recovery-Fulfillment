@@ -63,12 +63,21 @@ have a production ecommerce system behind it").
 
 | Dataset | Freshness target | Enforced by |
 |---|---|---|
-| `bronze.clickstream_events` | < 5 min from event to bronze (streaming) | Structured Streaming trigger interval + `pipeline_audit_log` watermark check |
-| `bronze.orders*` | < 30 min from batch drop to bronze | Databricks Workflow schedule + freshness check task |
-| `silver.*` | < 15 min after bronze (streaming), < 30 min after bronze (batch) | Downstream task timeout in the Workflow job |
-| `gold.cart_recovery_signal` | Refreshed hourly | Databricks Workflow schedule (cron, hourly) |
-| `gold.fulfillment_risk_signal` | Refreshed every 4 hours | Databricks Workflow schedule |
-| `gold.exec_summary_*` | Refreshed daily (06:00 UTC) | Databricks Workflow schedule |
+| `bronze.clickstream_events` | < 5 min from event to bronze (streaming) | Streaming trigger interval + `STREAMING_BACKLOG_SECONDS` health rule + `freshness_check` |
+| `bronze.orders*` | < 30 min from batch drop to bronze | Databricks Workflow schedule + `freshness_check` job (every 15 min) |
+| `silver.*` | < 15 min after bronze (streaming), < 30 min after bronze (batch) | Downstream task timeout in the Workflow job + `freshness_check` |
+| `gold.cart_recovery_signal` | Refreshed hourly | Workflow schedule (cron, hourly) + `assert_upstream_fresh` before publish |
+| `gold.fulfillment_risk_signal` | Refreshed every 4 hours | Workflow schedule + `assert_upstream_fresh` before publish |
+| `gold.exec_summary_*` | Refreshed daily (06:00 UTC) | Workflow schedule + `assert_upstream_fresh` before publish |
+
+Two distinct detection mechanisms, because they catch different failures. `assert_upstream_fresh`
+(`src/quality/freshness.py`) runs *inside* a consumer and refuses to publish on stale inputs — it
+stops a gold table being stamped with a current timestamp over three-day-old state. The
+`freshness_check` job (`src/quality/freshness_check.py`) runs on its own 15-minute schedule and
+checks every dataset from the outside, because a run that never starts — paused schedule, deleted
+job, cluster that won't launch — has no process alive to report anything. Neither one substitutes
+for the other: the first cannot fire if the consumer never runs, and the second cannot stop a bad
+publish, only notice it afterwards.
 
 ## Repository working agreements
 

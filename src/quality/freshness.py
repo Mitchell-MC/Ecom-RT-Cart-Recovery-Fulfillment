@@ -63,7 +63,9 @@ UPSTREAM_REQUIREMENTS: dict[str, tuple[UpstreamRequirement, ...]] = {
     # yesterday's gold into "today's" exec summary is the exact laundering this gate exists for.
     "gold_exec_summary_marts": (
         UpstreamRequirement("gold", "cart_recovery_signal", "_gold_computed_at", 1440),
-        UpstreamRequirement("gold", "fulfillment_risk_signal", "_gold_computed_at", 1440),
+        UpstreamRequirement(
+            "gold", "fulfillment_risk_signal", "_gold_computed_at", 1440
+        ),
         UpstreamRequirement("silver", "shipments", SILVER_WATERMARK, 1440),
         UpstreamRequirement("silver", "clickstream_events", SILVER_WATERMARK, 1440),
     ),

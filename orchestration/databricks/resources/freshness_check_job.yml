@@ -1,0 +1,47 @@
+# The freshness monitor docs/project-charter.md's SLA table has always cited. Every other
+# failure signal in this bundle is emitted by a job that is running; this one exists to catch
+# the case where nothing is running at all -- a paused schedule, a deleted job, a cluster that
+# can't launch -- which by definition cannot report itself.
+#
+# Runs every 15 minutes: the shortest cadence it watches, so a stopped pipeline surfaces within
+# about one SLA period instead of whenever a human notices a stale dashboard.
+resources:
+  jobs:
+    freshness_check:
+      name: "[${bundle.target}] freshness_check"
+      schedule:
+        quartz_cron_expression: "0 */15 * * * ?"
+        timezone_id: UTC
+      parameters:
+        - name: env
+          default: ${var.environment}
+        - name: storage_suffix
+          default: ${var.storage_suffix}
+      email_notifications:
+        on_failure:
+          - ${var.alert_email}
+      job_clusters:
+        - job_cluster_key: check_cluster
+          new_cluster:
+            spark_version: ${var.spark_version}
+            node_type_id: ${var.node_type_id}
+            # Single node: this reads one aggregate per table and nothing else. A monitor that
+            # costs real money to run every 15 minutes is a monitor someone eventually switches
+            # off, which defeats the point of having it.
+            num_workers: 0
+            spark_conf:
+              spark.master: "local[*]"
+              spark.databricks.cluster.profile: singleNode
+            custom_tags:
+              ResourceClass: SingleNode
+            policy_id: ${var.job_cluster_policy_id}
+            data_security_mode: SINGLE_USER
+      tasks:
+        - task_key: check
+          job_cluster_key: check_cluster
+          spark_python_task:
+            python_file: ../../src/quality/freshness_check.py
+          timeout_seconds: 300
+          # No retries: a breach is a real condition, not a transient fault, and retrying it
+          # only delays the alert by the retry interval.
+          max_retries: 0
