@@ -32,6 +32,7 @@ from pyspark.sql.types import (
 sys.path.append(
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../common")
 )
+from audit import job_run  # noqa: E402
 from config import get_config  # noqa: E402
 
 CLICKSTREAM_SCHEMA = StructType(
@@ -91,15 +92,26 @@ def main():
     checkpoint_path = cfg.checkpoint_path("clickstream_bronze")
     target_table = cfg.table("bronze", "clickstream_events")
 
-    query = (
-        build_stream(spark, raw_path, checkpoint_path, schema_location)
-        .trigger(
-            processingTime="1 minute"
-        )  # continuous micro-batch, targets the <5min bronze SLA
-        .outputMode("append")
-        .toTable(target_table)
-    )
-    query.awaitTermination()
+    # awaitTermination re-raises whatever killed the query, so wrapping it means a stream that
+    # dies at 3am leaves a "failed" row behind. Databricks auto-restarts continuous jobs, which
+    # is precisely why this matters: a query that crash-loops looks identical to a healthy one
+    # from the outside, and the restart count is not somewhere anyone looks.
+    with job_run(
+        spark,
+        cfg,
+        job_name="bronze_clickstream_stream",
+        layer="bronze",
+        target_table=target_table,
+    ):
+        query = (
+            build_stream(spark, raw_path, checkpoint_path, schema_location)
+            .trigger(
+                processingTime="1 minute"
+            )  # continuous micro-batch, targets the <5min bronze SLA
+            .outputMode("append")
+            .toTable(target_table)
+        )
+        query.awaitTermination()
 
 
 if __name__ == "__main__":

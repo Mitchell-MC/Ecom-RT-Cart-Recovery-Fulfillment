@@ -42,6 +42,7 @@ from pyspark.sql.types import (
 sys.path.append(
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../common")
 )
+from audit import job_run  # noqa: E402
 from config import get_config  # noqa: E402
 
 
@@ -264,15 +265,26 @@ def main():
     cfg = get_config()
     raw_path = f"{cfg.container_path('bronze')}/raw/orders"
 
-    for spec in TABLE_SPECS:
-        source = read_source(spark, raw_path, spec)
-        source_rows = validate(source, spec)
-        target_table = cfg.table("bronze", spec.name)
-        merge_into_bronze(spark, source, target_table, spec.merge_keys)
-        print(
-            f"bronze.{spec.name}: {source_rows} source rows -> {target_table} "
-            f"({describe_last_write(spark, target_table)})"
-        )
+    with job_run(
+        spark,
+        cfg,
+        job_name="bronze_orders_domain",
+        layer="bronze",
+        target_table=cfg.schema("bronze") + ".*",
+    ) as run:
+        total_rows = 0
+        for spec in TABLE_SPECS:
+            source = read_source(spark, raw_path, spec)
+            source_rows = validate(source, spec)
+            target_table = cfg.table("bronze", spec.name)
+            merge_into_bronze(spark, source, target_table, spec.merge_keys)
+            total_rows += source_rows
+            # Recorded per table so a mid-loop failure still shows how far the run got.
+            run.row_count = total_rows
+            print(
+                f"bronze.{spec.name}: {source_rows} source rows -> {target_table} "
+                f"({describe_last_write(spark, target_table)})"
+            )
 
 
 if __name__ == "__main__":

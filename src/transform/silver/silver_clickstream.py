@@ -22,6 +22,7 @@ from pyspark.sql import functions as F
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(os.path.join(_THIS_DIR, "../../common"))
 sys.path.append(os.path.join(_THIS_DIR, "../../quality"))
+from audit import job_run  # noqa: E402
 from config import get_config  # noqa: E402
 from dq_checks import (  # noqa: E402
     DQRule,
@@ -139,17 +140,24 @@ def main():
         .withWatermark("event_timestamp", "2 hours")
     )
 
-    query = (
-        stream.writeStream.foreachBatch(
-            lambda df, batch_id: process_batch(
-                df, batch_id, spark, silver_table, quarantine_table
+    with job_run(
+        spark,
+        cfg,
+        job_name="silver_clickstream",
+        layer="silver",
+        target_table=silver_table,
+    ):
+        query = (
+            stream.writeStream.foreachBatch(
+                lambda df, batch_id: process_batch(
+                    df, batch_id, spark, silver_table, quarantine_table
+                )
             )
+            .option("checkpointLocation", checkpoint_path)
+            .trigger(processingTime="2 minutes")
+            .start()
         )
-        .option("checkpointLocation", checkpoint_path)
-        .trigger(processingTime="2 minutes")
-        .start()
-    )
-    query.awaitTermination()
+        query.awaitTermination()
 
 
 if __name__ == "__main__":

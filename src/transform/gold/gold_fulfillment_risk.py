@@ -7,16 +7,16 @@ from __future__ import annotations
 
 import os
 import sys
-from datetime import datetime, timezone
 
 from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql import functions as F
 
-sys.path.append(
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../common")
-)
-from audit import log_run  # noqa: E402
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.append(os.path.join(_THIS_DIR, "../../common"))
+sys.path.append(os.path.join(_THIS_DIR, "../../quality"))
+from audit import job_run  # noqa: E402
 from config import get_config  # noqa: E402
+from freshness import assert_upstream_fresh  # noqa: E402
 
 
 def open_orders_with_shipment(orders: DataFrame, shipments: DataFrame) -> DataFrame:
@@ -103,35 +103,36 @@ def score(orders: DataFrame) -> DataFrame:
 
 
 def main():
-    started_at = datetime.now(timezone.utc)
     spark = SparkSession.builder.appName("gold_fulfillment_risk").getOrCreate()
     cfg = get_config()
-
-    orders = spark.read.table(cfg.table("silver", "orders"))
-    shipments = spark.read.table(cfg.table("silver", "shipments"))
-    order_items = spark.read.table(cfg.table("silver", "order_items"))
-    inventory = spark.read.table(cfg.table("silver", "inventory"))
-
-    open_orders = open_orders_with_shipment(orders, shipments)
-    with_inventory = with_inventory_risk(open_orders, order_items, inventory)
-    scored = score(with_inventory)
-
     target_table = cfg.table("gold", "fulfillment_risk_signal")
-    scored.write.format("delta").mode("overwrite").option(
-        "overwriteSchema", "true"
-    ).saveAsTable(target_table)
 
-    row_count = scored.count()
-    log_run(
+    with job_run(
         spark,
         cfg,
         job_name="gold_fulfillment_risk",
         layer="gold",
         target_table=target_table,
-        row_count=row_count,
-        started_at=started_at,
-    )
-    print(f"gold.fulfillment_risk_signal: {row_count} open orders scored")
+    ) as run:
+        assert_upstream_fresh(spark, cfg, "gold_fulfillment_risk")
+
+        orders = spark.read.table(cfg.table("silver", "orders"))
+        shipments = spark.read.table(cfg.table("silver", "shipments"))
+        order_items = spark.read.table(cfg.table("silver", "order_items"))
+        inventory = spark.read.table(cfg.table("silver", "inventory"))
+
+        open_orders = open_orders_with_shipment(orders, shipments)
+        with_inventory = with_inventory_risk(open_orders, order_items, inventory)
+        scored = score(with_inventory).withColumn(
+            "_gold_computed_at", F.current_timestamp()
+        )
+
+        scored.write.format("delta").mode("overwrite").option(
+            "overwriteSchema", "true"
+        ).saveAsTable(target_table)
+
+        run.row_count = scored.count()
+        print(f"gold.fulfillment_risk_signal: {run.row_count} open orders scored")
 
 
 if __name__ == "__main__":

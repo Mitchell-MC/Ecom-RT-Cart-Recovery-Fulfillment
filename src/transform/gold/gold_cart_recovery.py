@@ -8,16 +8,16 @@ from __future__ import annotations
 
 import os
 import sys
-from datetime import datetime, timezone
 
 from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql import functions as F
 
-sys.path.append(
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../common")
-)
-from audit import log_run  # noqa: E402
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.append(os.path.join(_THIS_DIR, "../../common"))
+sys.path.append(os.path.join(_THIS_DIR, "../../quality"))
+from audit import job_run  # noqa: E402
 from config import get_config  # noqa: E402
+from freshness import assert_upstream_fresh  # noqa: E402
 
 CART_EVENT_TYPES = [
     "add_to_cart",
@@ -149,33 +149,33 @@ def score_carts(abandoned: DataFrame, orders: DataFrame) -> DataFrame:
 
 
 def main():
-    started_at = datetime.now(timezone.utc)
     spark = SparkSession.builder.appName("gold_cart_recovery").getOrCreate()
     cfg = get_config()
-
-    events = spark.read.table(cfg.table("silver", "clickstream_events"))
-    orders = spark.read.table(cfg.table("silver", "orders"))
-
-    cart_agg = aggregate_carts(events)
-    abandoned = filter_abandoned(cart_agg)
-    scored = score_carts(abandoned, orders)
-
     target_table = cfg.table("gold", "cart_recovery_signal")
-    scored.write.format("delta").mode("overwrite").option(
-        "overwriteSchema", "true"
-    ).saveAsTable(target_table)
 
-    row_count = scored.count()
-    log_run(
+    with job_run(
         spark,
         cfg,
         job_name="gold_cart_recovery",
         layer="gold",
         target_table=target_table,
-        row_count=row_count,
-        started_at=started_at,
-    )
-    print(f"gold.cart_recovery_signal: {row_count} abandoned carts scored")
+    ) as run:
+        assert_upstream_fresh(spark, cfg, "gold_cart_recovery")
+
+        events = spark.read.table(cfg.table("silver", "clickstream_events"))
+        orders = spark.read.table(cfg.table("silver", "orders"))
+
+        cart_agg = aggregate_carts(events)
+        abandoned = filter_abandoned(cart_agg)
+        scored = score_carts(abandoned, orders)
+
+        scored = scored.withColumn("_gold_computed_at", F.current_timestamp())
+        scored.write.format("delta").mode("overwrite").option(
+            "overwriteSchema", "true"
+        ).saveAsTable(target_table)
+
+        run.row_count = scored.count()
+        print(f"gold.cart_recovery_signal: {run.row_count} abandoned carts scored")
 
 
 if __name__ == "__main__":
