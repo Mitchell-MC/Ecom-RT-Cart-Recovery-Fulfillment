@@ -12,7 +12,8 @@ targeting the <30min bronze freshness SLA in docs/project-charter.md.
 Idempotency depends on the source being unique per merge key, which a MERGE cannot enforce on its
 own: duplicate source rows crash a MERGE ("multiple source rows matched") but insert silently on
 the first-run saveAsTable path, so the guarantee would be broken from day one in exactly the case
-no one notices. Both paths therefore dedupe first -- see dedupe_on_keys.
+no one notices. Both paths therefore dedupe first -- see dedupe_on_keys. Null merge keys are
+rejected outright before either path runs -- see validate.
 
 Usage (as a Databricks job task):
     spark-submit bronze_orders_domain.py --env=dev --storage_suffix=dv01
@@ -171,6 +172,62 @@ def dedupe_on_keys(source: DataFrame, merge_keys: tuple[str, ...]) -> DataFrame:
     )
 
 
+def validate(source: DataFrame, spec: TableSpec) -> int:
+    """Return the source row count, failing the load if any merge key is null.
+
+    The read schema marks merge-key columns non-nullable, but Spark's CSV reader does not
+    enforce nullability on read -- a blank field parses to null and passes straight through.
+    Null keys are corrosive on both write paths: the MERGE condition uses <=> (null-safe),
+    so every null-keyed source row matches every null-keyed target row, and dedupe_on_keys
+    collapses them all into one. A malformed export would quietly delete rows rather than
+    fail, which is exactly the class of failure this job should refuse to survive.
+
+    This is one aggregation pass, replacing the source.count() that used to run after the
+    merge purely for logging -- so it costs no extra scan.
+    """
+    aggs = [F.count(F.lit(1)).alias("_total")]
+    aggs += [
+        F.sum(F.col(k).isNull().cast("long")).alias(f"_null_{k}")
+        for k in spec.merge_keys
+    ]
+    row = source.agg(*aggs).collect()[0]
+
+    offenders = {
+        k: row[f"_null_{k}"]
+        for k in spec.merge_keys
+        if row[f"_null_{k}"] not in (0, None)
+    }
+    if offenders:
+        detail = ", ".join(f"{k}={n}" for k, n in offenders.items())
+        raise ValueError(
+            f"{spec.name}: null values in merge key column(s) ({detail}) out of "
+            f"{row['_total']} source rows; refusing to merge on a key that would "
+            f"collapse distinct rows"
+        )
+    return row["_total"]
+
+
+def describe_last_write(spark: SparkSession, target_table: str) -> str:
+    """Summarize what the last commit actually wrote, from the Delta transaction log.
+
+    Reporting the source row count implies every row landed, which is wrong for a MERGE
+    where most rows are no-op updates. The log has the real numbers and costs no scan.
+    """
+    row = (
+        DeltaTable.forName(spark, target_table)
+        .history(1)
+        .select("operation", "operationMetrics")
+        .collect()[0]
+    )
+    metrics = row["operationMetrics"] or {}
+    if row["operation"] == "MERGE":
+        return (
+            f"inserted {metrics.get('numTargetRowsInserted', '?')}, "
+            f"updated {metrics.get('numTargetRowsUpdated', '?')}"
+        )
+    return f"wrote {metrics.get('numOutputRows', '?')} rows"
+
+
 def merge_into_bronze(
     spark: SparkSession,
     source: DataFrame,
@@ -209,10 +266,12 @@ def main():
 
     for spec in TABLE_SPECS:
         source = read_source(spark, raw_path, spec)
+        source_rows = validate(source, spec)
         target_table = cfg.table("bronze", spec.name)
         merge_into_bronze(spark, source, target_table, spec.merge_keys)
         print(
-            f"bronze.{spec.name}: merged {source.count()} source rows -> {target_table}"
+            f"bronze.{spec.name}: {source_rows} source rows -> {target_table} "
+            f"({describe_last_write(spark, target_table)})"
         )
 
 
