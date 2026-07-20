@@ -6,11 +6,16 @@ Source files are produced by data_generation/generate_orders_domain.py landing a
 idempotently MERGEd into its bronze Delta table on a natural/composite key so re-running the job
 (retry, backfill) never duplicates rows -- a batch-ingestion equivalent of the streaming job's
 checkpoint-based exactly-once behavior. Runs on the `job_default` cluster policy as a scheduled
-Databricks Workflow task (see orchestration/databricks/resources/bronze_job.yml), targeting the
-<30min bronze freshness SLA in docs/project-charter.md.
+Databricks Workflow task (see orchestration/databricks/resources/order_domain_ingest_job.yml),
+targeting the <30min bronze freshness SLA in docs/project-charter.md.
+
+Idempotency depends on the source being unique per merge key, which a MERGE cannot enforce on its
+own: duplicate source rows crash a MERGE ("multiple source rows matched") but insert silently on
+the first-run saveAsTable path, so the guarantee would be broken from day one in exactly the case
+no one notices. Both paths therefore dedupe first -- see dedupe_on_keys.
 
 Usage (as a Databricks job task):
-    spark-submit bronze_orders_domain.py  # env + storage_suffix come from job parameters
+    spark-submit bronze_orders_domain.py --env=dev --storage_suffix=dv01
 """
 
 from __future__ import annotations
@@ -20,7 +25,7 @@ import sys
 from dataclasses import dataclass
 
 from delta.tables import DeltaTable
-from pyspark.sql import DataFrame, SparkSession
+from pyspark.sql import DataFrame, SparkSession, Window
 from pyspark.sql import functions as F
 from pyspark.sql.types import (
     BooleanType,
@@ -137,11 +142,32 @@ def read_source(spark: SparkSession, raw_path: str, spec: TableSpec) -> DataFram
     return (
         spark.read.format("csv")
         .option("header", "true")
+        # Supplying a schema makes the reader bind columns by position and ignore the header,
+        # so a column added or reordered upstream would land data in the wrong fields -- some
+        # nulling out, adjacent strings swapping silently. enforceSchema=false validates the
+        # header against the schema and fails the read when they diverge.
+        .option("enforceSchema", "false")
         .schema(spec.schema)
         .load(f"{raw_path}/{spec.name}.csv")
         .withColumn("_bronze_ingested_at", F.current_timestamp())
         .withColumn("_source_file", F.input_file_name())
         .withColumn("_batch_run_id", F.lit(_current_run_id(spark)))
+    )
+
+
+def dedupe_on_keys(source: DataFrame, merge_keys: tuple[str, ...]) -> DataFrame:
+    """Keep one row per merge key, preferring the last occurrence in file order.
+
+    Every row in a batch shares the same _bronze_ingested_at (it's current_timestamp()), so
+    ordering by it would tie-break arbitrarily. File order is the meaningful signal in a
+    flat OMS export -- a later line for the same key supersedes an earlier one.
+    """
+    ordering = F.monotonically_increasing_id()
+    window = Window.partitionBy(*merge_keys).orderBy(ordering.desc())
+    return (
+        source.withColumn("_rn", F.row_number().over(window))
+        .filter(F.col("_rn") == 1)
+        .drop("_rn")
     )
 
 
@@ -151,6 +177,10 @@ def merge_into_bronze(
     target_table: str,
     merge_keys: tuple[str, ...],
 ) -> None:
+    # Applied to both paths: MERGE rejects duplicate source rows loudly, but saveAsTable would
+    # accept them silently and leave run 2's MERGE to crash on the mess.
+    source = dedupe_on_keys(source, merge_keys)
+
     if not spark.catalog.tableExists(target_table):
         source.write.format("delta").saveAsTable(target_table)
         return
