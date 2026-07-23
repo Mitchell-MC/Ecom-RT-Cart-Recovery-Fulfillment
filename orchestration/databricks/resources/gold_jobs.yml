@@ -9,6 +9,18 @@ resources:
       schedule:
         quartz_cron_expression: "0 0 * * * ?" # hourly, on the hour
         timezone_id: UTC
+      email_notifications:
+        on_failure:
+          - ${var.alert_email}
+        on_duration_warning_threshold_exceeded:
+          - ${var.alert_email}
+      # A run that outlives its own cadence is the early signal for a job that will later hang
+      # outright; on_failure never fires for a hang, so duration is the only warning available.
+      health:
+        rules:
+          - metric: RUN_DURATION_SECONDS
+            op: GREATER_THAN
+            value: 600
       parameters:
         - name: env
           default: ${var.environment}
@@ -22,6 +34,10 @@ resources:
             num_workers: 2
             policy_id: ${var.job_cluster_policy_id}
             data_security_mode: SINGLE_USER
+            spark_env_vars:
+              # Injected from a Databricks secret scope, never a job parameter -- parameters
+              # are visible in the run UI and the Jobs API. src/common/alerting.py reads this.
+              SLACK_WEBHOOK_URL: "{{secrets/${var.secret_scope}/slack_webhook_url}}"
       tasks:
         - task_key: run
           job_cluster_key: gold_cluster
@@ -36,6 +52,16 @@ resources:
       schedule:
         quartz_cron_expression: "0 0 */4 * * ?" # every 4 hours
         timezone_id: UTC
+      email_notifications:
+        on_failure:
+          - ${var.alert_email}
+        on_duration_warning_threshold_exceeded:
+          - ${var.alert_email}
+      health:
+        rules:
+          - metric: RUN_DURATION_SECONDS
+            op: GREATER_THAN
+            value: 600
       parameters:
         - name: env
           default: ${var.environment}
@@ -49,6 +75,10 @@ resources:
             num_workers: 2
             policy_id: ${var.job_cluster_policy_id}
             data_security_mode: SINGLE_USER
+            spark_env_vars:
+              # Injected from a Databricks secret scope, never a job parameter -- parameters
+              # are visible in the run UI and the Jobs API. src/common/alerting.py reads this.
+              SLACK_WEBHOOK_URL: "{{secrets/${var.secret_scope}/slack_webhook_url}}"
       tasks:
         - task_key: run
           job_cluster_key: gold_cluster
@@ -63,6 +93,16 @@ resources:
       schedule:
         quartz_cron_expression: "0 0 6 * * ?" # daily, 06:00 UTC
         timezone_id: UTC
+      email_notifications:
+        on_failure:
+          - ${var.alert_email}
+        on_duration_warning_threshold_exceeded:
+          - ${var.alert_email}
+      health:
+        rules:
+          - metric: RUN_DURATION_SECONDS
+            op: GREATER_THAN
+            value: 450
       parameters:
         - name: env
           default: ${var.environment}
@@ -76,6 +116,10 @@ resources:
             num_workers: 1
             policy_id: ${var.job_cluster_policy_id}
             data_security_mode: SINGLE_USER
+            spark_env_vars:
+              # Injected from a Databricks secret scope, never a job parameter -- parameters
+              # are visible in the run UI and the Jobs API. src/common/alerting.py reads this.
+              SLACK_WEBHOOK_URL: "{{secrets/${var.secret_scope}/slack_webhook_url}}"
       tasks:
         - task_key: run
           job_cluster_key: gold_cluster

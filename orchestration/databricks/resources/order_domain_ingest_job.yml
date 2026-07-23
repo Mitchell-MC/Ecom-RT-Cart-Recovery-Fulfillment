@@ -11,6 +11,18 @@ resources:
       schedule:
         quartz_cron_expression: "0 */15 * * * ?"
         timezone_id: UTC
+      email_notifications:
+        on_failure:
+          - ${var.alert_email}
+        on_duration_warning_threshold_exceeded:
+          - ${var.alert_email}
+      # Warn at 900s: a run that outlasts its own 15-minute cadence queues the next one, and
+      # queued runs are how the <30min bronze SLA slips without any task ever reporting failure.
+      health:
+        rules:
+          - metric: RUN_DURATION_SECONDS
+            op: GREATER_THAN
+            value: 900
       parameters:
         - name: env
           default: ${var.environment}
@@ -24,6 +36,10 @@ resources:
             num_workers: 2
             policy_id: ${var.job_cluster_policy_id}
             data_security_mode: SINGLE_USER
+            spark_env_vars:
+              # Injected from a Databricks secret scope, never a job parameter -- parameters
+              # are visible in the run UI and the Jobs API. src/common/alerting.py reads this.
+              SLACK_WEBHOOK_URL: "{{secrets/${var.secret_scope}/slack_webhook_url}}"
       tasks:
         - task_key: bronze_orders_domain
           job_cluster_key: batch_cluster

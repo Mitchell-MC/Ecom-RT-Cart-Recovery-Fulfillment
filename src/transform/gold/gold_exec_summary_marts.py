@@ -20,11 +20,14 @@ from delta.tables import DeltaTable
 from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql import functions as F
 
-sys.path.append(
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../common")
-)
-from audit import log_run  # noqa: E402
+# On a serverless spark_python_task the file is exec()'d with no __file__ defined;
+# sys.argv[0] holds the script path there. Classic clusters set __file__ normally.
+_THIS_DIR = os.path.dirname(os.path.abspath(globals().get("__file__") or sys.argv[0]))
+sys.path.append(os.path.join(_THIS_DIR, "../../common"))
+sys.path.append(os.path.join(_THIS_DIR, "../../quality"))
+from audit import job_run  # noqa: E402
 from config import get_config  # noqa: E402
+from freshness import assert_upstream_fresh  # noqa: E402
 
 PRIORITY_ACTION_THRESHOLD = 60
 RISK_ACTION_THRESHOLD = 60
@@ -121,45 +124,48 @@ def upsert_daily_row(spark: SparkSession, target_table: str, metrics: dict) -> N
 
 
 def main():
-    started_at = datetime.now(timezone.utc)
     spark = SparkSession.builder.appName("gold_exec_summary_marts").getOrCreate()
-    from pyspark.dbutils import DBUtils
-
-    dbutils = DBUtils(spark)
-    cfg = get_config(dbutils)
-
-    cart_recovery_signal = spark.read.table(cfg.table("gold", "cart_recovery_signal"))
-    fulfillment_risk_signal = spark.read.table(
-        cfg.table("gold", "fulfillment_risk_signal")
-    )
-    shipments = spark.read.table(cfg.table("silver", "shipments"))
-    clickstream_events = spark.read.table(cfg.table("silver", "clickstream_events"))
-
-    metrics = {
-        "metric_date": datetime.now(timezone.utc).date().isoformat(),
-        "recoverable_revenue": recoverable_revenue(cart_recovery_signal),
-        "delayed_order_revenue_risk": delayed_order_revenue_risk(
-            fulfillment_risk_signal
-        ),
-        "on_time_delivery_rate": on_time_delivery_rate(shipments),
-        "conversion_lag_median_minutes": conversion_lag_median_minutes(
-            clickstream_events
-        ),
-    }
-
+    cfg = get_config()
     target_table = cfg.table("gold", "exec_summary_daily")
-    upsert_daily_row(spark, target_table, metrics)
 
-    log_run(
+    with job_run(
         spark,
         cfg,
         job_name="gold_exec_summary_marts",
         layer="gold",
         target_table=target_table,
-        row_count=1,
-        started_at=started_at,
-    )
-    print(f"gold.exec_summary_daily upserted for {metrics['metric_date']}: {metrics}")
+    ) as run:
+        # The 06:00 slot assumes the hourly/4-hourly gold jobs already landed today's snapshot
+        # (see gold_jobs.yml). That assumption is scheduling, not a dependency, so it has to be
+        # checked rather than trusted -- otherwise a day of missed runs is rolled up as today's.
+        assert_upstream_fresh(spark, cfg, "gold_exec_summary_marts")
+
+        cart_recovery_signal = spark.read.table(
+            cfg.table("gold", "cart_recovery_signal")
+        )
+        fulfillment_risk_signal = spark.read.table(
+            cfg.table("gold", "fulfillment_risk_signal")
+        )
+        shipments = spark.read.table(cfg.table("silver", "shipments"))
+        clickstream_events = spark.read.table(cfg.table("silver", "clickstream_events"))
+
+        metrics = {
+            "metric_date": datetime.now(timezone.utc).date().isoformat(),
+            "recoverable_revenue": recoverable_revenue(cart_recovery_signal),
+            "delayed_order_revenue_risk": delayed_order_revenue_risk(
+                fulfillment_risk_signal
+            ),
+            "on_time_delivery_rate": on_time_delivery_rate(shipments),
+            "conversion_lag_median_minutes": conversion_lag_median_minutes(
+                clickstream_events
+            ),
+        }
+
+        upsert_daily_row(spark, target_table, metrics)
+        run.row_count = 1
+        print(
+            f"gold.exec_summary_daily upserted for {metrics['metric_date']}: {metrics}"
+        )
 
 
 if __name__ == "__main__":

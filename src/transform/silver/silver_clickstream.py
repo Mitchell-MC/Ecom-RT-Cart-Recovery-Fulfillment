@@ -19,13 +19,17 @@ import sys
 from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql import functions as F
 
-_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+# On a serverless spark_python_task the file is exec()'d with no __file__ defined;
+# sys.argv[0] holds the script path there. Classic clusters set __file__ normally.
+_THIS_DIR = os.path.dirname(os.path.abspath(globals().get("__file__") or sys.argv[0]))
 sys.path.append(os.path.join(_THIS_DIR, "../../common"))
 sys.path.append(os.path.join(_THIS_DIR, "../../quality"))
+from audit import job_run  # noqa: E402
 from config import get_config  # noqa: E402
 from dq_checks import (  # noqa: E402
     DQRule,
     apply_dq_rules,
+    assert_quarantine_rate_ok,
     dedupe_last_write_wins,
     within_clock_skew,
     write_quarantine,
@@ -118,27 +122,31 @@ def process_batch(
         )
 
     write_quarantine(quarantine_df, quarantine_table)
+
+    clean_count = deduped.count()
+    quarantined_count = quarantine_df.count()
     print(
-        f"batch {batch_id}: {deduped.count()} clean rows merged, "
-        f"{quarantine_df.count()} quarantined"
+        f"batch {batch_id}: {clean_count} clean rows merged, "
+        f"{quarantined_count} quarantined"
+    )
+    # Deliberately fail-stop rather than warn: a batch this bad means the event contract
+    # changed, and continuing would publish a filtered slice of reality while reporting health.
+    # This does stop the stream -- Databricks restarts it, hits the same batch (the checkpoint
+    # hasn't advanced), and gives up after max_retries: 3, which is the intended outcome: a
+    # stopped stream that has notified someone beats a running one quietly dropping most events.
+    assert_quarantine_rate_ok(
+        "silver.clickstream_events", clean_count, quarantined_count
     )
 
 
 def main():
     spark = SparkSession.builder.appName("silver_clickstream").getOrCreate()
-    from pyspark.dbutils import DBUtils
-
-    dbutils = DBUtils(spark)
-    cfg = get_config(dbutils)
-
-    dbutils.widgets.text("storage_suffix", "")
-    storage_suffix = dbutils.widgets.get("storage_suffix")
-    storage_account = cfg.storage_account(storage_suffix)
+    cfg = get_config()
 
     bronze_table = cfg.table("bronze", "clickstream_events")
     silver_table = cfg.table("silver", "clickstream_events")
     quarantine_table = cfg.table("silver", "clickstream_events_quarantine")
-    checkpoint_path = cfg.checkpoint_path(storage_account, "clickstream_silver")
+    checkpoint_path = cfg.checkpoint_path("clickstream_silver")
 
     stream = (
         spark.readStream.format("delta")
@@ -146,17 +154,24 @@ def main():
         .withWatermark("event_timestamp", "2 hours")
     )
 
-    query = (
-        stream.writeStream.foreachBatch(
-            lambda df, batch_id: process_batch(
-                df, batch_id, spark, silver_table, quarantine_table
+    with job_run(
+        spark,
+        cfg,
+        job_name="silver_clickstream",
+        layer="silver",
+        target_table=silver_table,
+    ):
+        query = (
+            stream.writeStream.foreachBatch(
+                lambda df, batch_id: process_batch(
+                    df, batch_id, spark, silver_table, quarantine_table
+                )
             )
+            .option("checkpointLocation", checkpoint_path)
+            .trigger(**cfg.stream_trigger("2 minutes"))
+            .start()
         )
-        .option("checkpointLocation", checkpoint_path)
-        .trigger(processingTime="2 minutes")
-        .start()
-    )
-    query.awaitTermination()
+        query.awaitTermination()
 
 
 if __name__ == "__main__":

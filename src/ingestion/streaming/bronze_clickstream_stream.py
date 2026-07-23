@@ -1,7 +1,7 @@
 """Structured Streaming ingestion: raw clickstream JSON -> bronze.clickstream_events.
 
 Runs as a continuous Databricks Workflow job (see orchestration/databricks/resources/
-bronze_job.yml) on the `streaming` cluster policy (autotermination disabled -- this task is
+streaming_jobs.yml) on the `streaming` cluster policy (autotermination disabled -- this task is
 meant to run 24/7 and be restarted by the Workflow on failure, not to complete and shut down).
 
 Bronze is a landing zone, not a quality gate: rows are never dropped here. Autoloader's
@@ -29,9 +29,11 @@ from pyspark.sql.types import (
     StructType,
 )
 
-sys.path.append(
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../common")
-)
+# On a serverless spark_python_task the file is exec()'d with no __file__ defined;
+# sys.argv[0] holds the script path there. Classic clusters set __file__ normally.
+_THIS_DIR = os.path.dirname(os.path.abspath(globals().get("__file__") or sys.argv[0]))
+sys.path.append(os.path.join(_THIS_DIR, "../../common"))
+from audit import job_run  # noqa: E402
 from config import get_config  # noqa: E402
 
 CLICKSTREAM_SCHEMA = StructType(
@@ -82,33 +84,35 @@ def build_stream(
 
 def main():
     spark = SparkSession.builder.appName("bronze_clickstream_stream").getOrCreate()
-    dbutils = _get_dbutils(spark)
-    cfg = get_config(dbutils)
+    cfg = get_config()
 
-    dbutils.widgets.text("storage_suffix", "")
-    storage_suffix = dbutils.widgets.get("storage_suffix")
-    storage_account = cfg.storage_account(storage_suffix)
-
-    raw_path = f"{cfg.container_path(storage_account, 'bronze')}/raw/clickstream"
-    schema_location = f"{cfg.container_path(storage_account, 'checkpoints')}/{cfg.env}/clickstream_schema"
-    checkpoint_path = cfg.checkpoint_path(storage_account, "clickstream_bronze")
+    raw_path = f"{cfg.container_path('bronze')}/raw/clickstream"
+    schema_location = (
+        f"{cfg.container_path('checkpoints')}/{cfg.env}/clickstream_schema"
+    )
+    checkpoint_path = cfg.checkpoint_path("clickstream_bronze")
     target_table = cfg.table("bronze", "clickstream_events")
 
-    query = (
-        build_stream(spark, raw_path, checkpoint_path, schema_location)
-        .trigger(
-            processingTime="1 minute"
-        )  # continuous micro-batch, targets the <5min bronze SLA
-        .outputMode("append")
-        .toTable(target_table)
-    )
-    query.awaitTermination()
-
-
-def _get_dbutils(spark: SparkSession):
-    from pyspark.dbutils import DBUtils  # available on Databricks Runtime
-
-    return DBUtils(spark)
+    # awaitTermination re-raises whatever killed the query, so wrapping it means a stream that
+    # dies at 3am leaves a "failed" row behind. Databricks auto-restarts continuous jobs, which
+    # is precisely why this matters: a query that crash-loops looks identical to a healthy one
+    # from the outside, and the restart count is not somewhere anyone looks.
+    with job_run(
+        spark,
+        cfg,
+        job_name="bronze_clickstream_stream",
+        layer="bronze",
+        target_table=target_table,
+    ):
+        query = (
+            build_stream(spark, raw_path, checkpoint_path, schema_location)
+            # continuous micro-batch (targets the <5min bronze SLA) by default; available_now
+            # drains the backlog once and stops for a bounded/scheduled run.
+            .trigger(**cfg.stream_trigger("1 minute"))
+            .outputMode("append")
+            .toTable(target_table)
+        )
+        query.awaitTermination()
 
 
 if __name__ == "__main__":

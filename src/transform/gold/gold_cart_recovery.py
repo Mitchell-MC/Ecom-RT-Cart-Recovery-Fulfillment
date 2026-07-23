@@ -1,6 +1,6 @@
 """gold.cart_recovery_signal -- one row per currently-abandoned cart, ranked by
 docs/metric-glossary.md's priority_score. Batch job, scheduled hourly (see
-orchestration/databricks/resources/gold_job.yml), reading the streaming-fed silver.clickstream_
+orchestration/databricks/resources/gold_jobs.yml), reading the streaming-fed silver.clickstream_
 events table plus silver.orders for customer purchase history.
 """
 
@@ -8,16 +8,18 @@ from __future__ import annotations
 
 import os
 import sys
-from datetime import datetime, timezone
 
 from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql import functions as F
 
-sys.path.append(
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../common")
-)
-from audit import log_run  # noqa: E402
+# On a serverless spark_python_task the file is exec()'d with no __file__ defined;
+# sys.argv[0] holds the script path there. Classic clusters set __file__ normally.
+_THIS_DIR = os.path.dirname(os.path.abspath(globals().get("__file__") or sys.argv[0]))
+sys.path.append(os.path.join(_THIS_DIR, "../../common"))
+sys.path.append(os.path.join(_THIS_DIR, "../../quality"))
+from audit import job_run  # noqa: E402
 from config import get_config  # noqa: E402
+from freshness import assert_upstream_fresh  # noqa: E402
 
 CART_EVENT_TYPES = [
     "add_to_cart",
@@ -149,36 +151,35 @@ def score_carts(abandoned: DataFrame, orders: DataFrame) -> DataFrame:
 
 
 def main():
-    started_at = datetime.now(timezone.utc)
     spark = SparkSession.builder.appName("gold_cart_recovery").getOrCreate()
-    from pyspark.dbutils import DBUtils
-
-    dbutils = DBUtils(spark)
-    cfg = get_config(dbutils)
-
-    events = spark.read.table(cfg.table("silver", "clickstream_events"))
-    orders = spark.read.table(cfg.table("silver", "orders"))
-
-    cart_agg = aggregate_carts(events)
-    abandoned = filter_abandoned(cart_agg)
-    scored = score_carts(abandoned, orders)
-
+    cfg = get_config()
     target_table = cfg.table("gold", "cart_recovery_signal")
-    scored.write.format("delta").mode("overwrite").option(
-        "overwriteSchema", "true"
-    ).saveAsTable(target_table)
 
-    row_count = scored.count()
-    log_run(
+    with job_run(
         spark,
         cfg,
         job_name="gold_cart_recovery",
         layer="gold",
         target_table=target_table,
-        row_count=row_count,
-        started_at=started_at,
-    )
-    print(f"gold.cart_recovery_signal: {row_count} abandoned carts scored")
+    ) as run:
+        assert_upstream_fresh(spark, cfg, "gold_cart_recovery")
+
+        events = spark.read.table(cfg.table("silver", "clickstream_events"))
+        orders = spark.read.table(cfg.table("silver", "orders"))
+
+        cart_agg = aggregate_carts(events)
+        abandoned = filter_abandoned(cart_agg)
+        scored = score_carts(abandoned, orders)
+
+        # No overwriteSchema. Gold is the contract with Power BI and the business, which makes
+        # it the strictest boundary in the pipeline rather than the loosest: with schema
+        # overwrite on, a transform bug that dropped or renamed a column silently rewrote the
+        # published schema and broke the dashboard instead of the job. A real schema change is
+        # now a deliberate migration (ALTER TABLE, or drop and rebuild), not a side effect.
+        scored.write.format("delta").mode("overwrite").saveAsTable(target_table)
+
+        run.row_count = scored.count()
+        print(f"gold.cart_recovery_signal: {run.row_count} abandoned carts scored")
 
 
 if __name__ == "__main__":

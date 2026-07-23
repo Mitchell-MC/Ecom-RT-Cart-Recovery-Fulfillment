@@ -19,11 +19,21 @@ from delta.tables import DeltaTable
 from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql import functions as F
 
-_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+# On a serverless spark_python_task the file is exec()'d with no __file__ defined;
+# sys.argv[0] holds the script path there. Classic clusters set __file__ normally.
+_THIS_DIR = os.path.dirname(os.path.abspath(globals().get("__file__") or sys.argv[0]))
 sys.path.append(os.path.join(_THIS_DIR, "../../common"))
 sys.path.append(os.path.join(_THIS_DIR, "../../quality"))
+from audit import job_run, log_dataset_metrics  # noqa: E402
 from config import get_config  # noqa: E402
-from dq_checks import DQRule, apply_dq_rules, write_quarantine  # noqa: E402
+from reconciliation import assert_rows_conserved  # noqa: E402
+from volume import assert_volume_plausible, trailing_baseline  # noqa: E402
+from dq_checks import (  # noqa: E402
+    DQRule,
+    apply_dq_rules,
+    assert_quarantine_rate_ok,
+    write_quarantine,
+)
 
 
 def _customers_standardize(df: DataFrame) -> DataFrame:
@@ -117,36 +127,82 @@ def merge_into_silver(
     )
 
 
-def process_table(spark: SparkSession, cfg, spec: SilverTableSpec) -> None:
+def process_table(spark: SparkSession, cfg, spec: SilverTableSpec) -> tuple[int, int]:
+    """Returns (rows_merged, rows_quarantined) so main can total them for the audit row."""
     bronze_table = cfg.table("bronze", spec.name)
     silver_table = cfg.table("silver", spec.name)
     quarantine_table = cfg.table("silver", f"{spec.name}_quarantine")
 
+    dataset = f"silver.{spec.name}"
     df = spark.read.table(bronze_table)
     standardized = spec.standardize(df)
+    baseline = trailing_baseline(spark, cfg, dataset)
 
     if spec.dq_rules:
         clean_df, quarantine_df = apply_dq_rules(standardized, spec.dq_rules())
         write_quarantine(quarantine_df, quarantine_table)
         quarantined_count = quarantine_df.count()
+        row_count = clean_df.count()
+        # Checked after the quarantine write so the rows that triggered it are inspectable --
+        # raising first would leave nothing to diagnose from.
+        assert_quarantine_rate_ok(dataset, row_count, quarantined_count)
     else:
         clean_df, quarantined_count = standardized, 0
+        row_count = clean_df.count()
+
+    # Uniform silver watermark: without it these tables carry only _bronze_ingested_at, so a
+    # freshness check on silver would actually be measuring bronze and would read as fresh even
+    # if this job had not run in days. src/quality/freshness.py depends on this column.
+    clean_df = clean_df.withColumn("_silver_processed_at", F.current_timestamp())
 
     merge_into_silver(spark, clean_df, silver_table, spec.merge_keys)
-    print(
-        f"silver.{spec.name}: {clean_df.count()} rows merged, {quarantined_count} quarantined"
+
+    source_rows = row_count + quarantined_count
+    log_dataset_metrics(
+        spark,
+        cfg,
+        dataset=dataset,
+        layer="silver",
+        source_rows=source_rows,
+        written_rows=row_count,
+        quarantined_rows=quarantined_count,
     )
+    # apply_dq_rules splits on a filter, so this balances by construction today. It is asserted
+    # anyway: the invariant is what makes a future change that drops rows here loud instead of
+    # silent, and that is the entire failure mode this branch exists to close.
+    assert_rows_conserved(
+        dataset,
+        source_rows=source_rows,
+        written_rows=row_count,
+        quarantined_rows=quarantined_count,
+    )
+    assert_volume_plausible(baseline, row_count)
+
+    print(f"{dataset}: {row_count} rows merged, {quarantined_count} quarantined")
+    return row_count, quarantined_count
 
 
 def main():
     spark = SparkSession.builder.appName("silver_orders_domain").getOrCreate()
-    from pyspark.dbutils import DBUtils
+    cfg = get_config()
 
-    dbutils = DBUtils(spark)
-    cfg = get_config(dbutils)
-
-    for spec in TABLE_SPECS:
-        process_table(spark, cfg, spec)
+    with job_run(
+        spark,
+        cfg,
+        job_name="silver_orders_domain",
+        layer="silver",
+        target_table=cfg.schema("silver") + ".*",
+    ) as run:
+        total_rows = 0
+        total_quarantined = 0
+        for spec in TABLE_SPECS:
+            rows, quarantined = process_table(spark, cfg, spec)
+            total_rows += rows
+            total_quarantined += quarantined
+            # Update as we go: a crash on table 4 of 6 still records what the first three did,
+            # which is the difference between "nothing ran" and "partially applied" during triage.
+            run.row_count = total_rows
+            run.quarantined_count = total_quarantined
 
 
 if __name__ == "__main__":
