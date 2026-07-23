@@ -63,3 +63,7 @@ bi/powerbi/*.pbix.bak
 docs/demo-script-10min.md
 docs/demo-script-30min.md
 docs/star-talking-points.md
+
+# AI agent working files
+CLAUDE.md
+DESIGN.md
