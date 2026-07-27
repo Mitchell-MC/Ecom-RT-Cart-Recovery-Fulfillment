@@ -22,8 +22,12 @@ doesn't ripple into every consumer of `customers`.
 
 **Gold** (`src/transform/gold/`) is where business logic and denormalization happen —
 `gold_cart_recovery.py` and `gold_fulfillment_risk.py` implement the scoring formulas from the
-metric glossary, and `gold_exec_summary_marts.py` turns the two point-in-time signal snapshots
-into a daily trend table for BI.
+metric glossary. Each writes two tables: an overwrite-mode current-snapshot table for the
+DirectQuery ops consumers, and an insert-only `*_history` table (periodic snapshot fact — see
+[docs/metric-glossary.md](metric-glossary.md#history-tables-periodic-snapshot-fact-pattern)) so
+history survives being overwritten. `gold_exec_summary_marts.py` reads those history tables to
+build the daily trend table for BI, rather than depending on its own schedule landing after a
+fresh snapshot.
 
 ## Streaming vs. batch, and why both
 

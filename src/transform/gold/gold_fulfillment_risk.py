@@ -1,6 +1,11 @@
 """gold.fulfillment_risk_signal -- one row per open (in-transit, not cancelled) order, ranked by
 docs/metric-glossary.md's fulfillment_risk_score. Batch job, scheduled every 4 hours (see
 orchestration/databricks/resources/gold_job.yml).
+
+Also appends every run's scored rows to gold.fulfillment_risk_signal_history (insert-only, one
+row per order per run) -- fulfillment_risk_signal itself stays overwrite-mode because
+DirectQuery/ops consumers (bi/powerbi/data-model.md) need the current snapshot, not history. See
+gold_cart_recovery.py for the matching pattern and docs/architecture.md for the rationale.
 """
 
 from __future__ import annotations
@@ -125,6 +130,12 @@ def main():
     ).saveAsTable(target_table)
 
     row_count = scored.count()
+
+    history_table = cfg.table("gold", "fulfillment_risk_signal_history")
+    scored.withColumn("_snapshot_at", F.col("_gold_computed_at")).write.format(
+        "delta"
+    ).mode("append").option("mergeSchema", "true").saveAsTable(history_table)
+
     log_run(
         spark,
         cfg,
