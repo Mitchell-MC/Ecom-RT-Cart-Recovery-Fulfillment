@@ -44,7 +44,9 @@ when `price_at_add` is null (bot/malformed event).
 
 ### 3. Cart Recovery Priority Score
 
-**Grain:** one row per `cart_id`, computed in `gold.cart_recovery_signal`.
+**Grain:** one row per `cart_id`, computed in `gold.cart_recovery_signal` (current-snapshot,
+overwritten each run) and appended to `gold.cart_recovery_signal_history` (insert-only, one row
+per `cart_id` per run, keyed by `_snapshot_at`) -- see "History tables" below.
 
 **Definition:** A 0–100 heuristic score combining recency, value, and customer history —
 documented as a rule-based v1 score, explicitly *not* a trained propensity model (see
@@ -67,7 +69,9 @@ price mix shifts).
 **Grain:** aggregate, trailing N days (BI-selectable: 1/7/30).
 
 **Definition:** `SUM(recoverable_cart_value)` across all currently-abandoned carts with
-`priority_score >= 60` (the "worth acting on today" cutoff).
+`priority_score >= 60` (the "worth acting on today" cutoff). `gold.exec_summary_daily` computes
+this once per day from the latest run in `gold.cart_recovery_signal_history` as of the exec-summary
+job's run time (not the live `gold.cart_recovery_signal` table) -- see "History tables" below.
 
 ### 5. On-Time Delivery Rate
 
@@ -81,8 +85,10 @@ on_time_delivery_rate = COUNT(orders WHERE delivered_at <= promised_delivery_dat
 
 ### 6. Fulfillment Risk Score
 
-**Grain:** one row per `order_id`, computed in `gold.fulfillment_risk_signal`, for orders that
-are not yet `delivered_at IS NOT NULL` and not `cancelled`.
+**Grain:** one row per `order_id`, computed in `gold.fulfillment_risk_signal` (current-snapshot,
+overwritten each run) and appended to `gold.fulfillment_risk_signal_history` (insert-only, one
+row per `order_id` per run, keyed by `_snapshot_at`) -- see "History tables" below, for orders
+that are not yet `delivered_at IS NOT NULL` and not `cancelled`.
 
 **Definition:** A 0–100 heuristic combining time pressure and known risk factors.
 
@@ -103,6 +109,9 @@ fulfillment_risk_score = 0.5 * time_pressure_score
 **Grain:** aggregate, current snapshot.
 
 **Definition:** `SUM(order_total_usd)` across open orders with `fulfillment_risk_score >= 60`.
+`gold.exec_summary_daily` computes this once per day from the latest run in
+`gold.fulfillment_risk_signal_history` as of the exec-summary job's run time (not the live
+`gold.fulfillment_risk_signal` table) -- see "History tables" below.
 
 ### 8. Conversion Lag
 
@@ -113,6 +122,35 @@ session event), the median time between first `add_to_cart` and `checkout_comple
 
 **Source:** `silver.clickstream_events` joined to `silver.orders` on `customer_id` +
 `cart_id → order_id` linkage captured at checkout.
+
+---
+
+## History tables (periodic snapshot fact pattern)
+
+`gold.cart_recovery_signal` and `gold.fulfillment_risk_signal` are **current-snapshot** tables:
+each run overwrites the previous one, because that's what the DirectQuery ops consumers in
+[bi/powerbi/data-model.md](../bi/powerbi/data-model.md) need ("what's abandoned/at-risk *right
+now*"). That means neither table can answer a historical question -- e.g. "what was the
+priority_score for this cart three runs ago" -- because the row is gone once the next run
+overwrites it.
+
+`gold.cart_recovery_signal_history` and `gold.fulfillment_risk_signal_history` fix that: every run
+of `gold_cart_recovery.py` / `gold_fulfillment_risk.py` appends its scored rows (insert-only,
+never updated or deleted) to the matching history table, timestamped by `_snapshot_at`. Schema is
+identical to the current-snapshot table plus `_snapshot_at`. This is a **periodic snapshot fact**
+(a full point-in-time copy on each run), not a proper Data Vault satellite (which would track only
+*changed* attributes row-by-row) -- the simpler pattern was chosen because these are two tables
+with append-only Delta writes already available, not because Data Vault's guarantees weren't
+considered; see the README's "Data model roadmap" section for when to graduate to Data Vault.
+
+`gold.exec_summary_daily` reads the history tables (latest run as of its own run time) instead of
+the current-snapshot tables, which removes the timing coupling described in
+`gold_exec_summary_marts.py`'s docstring: previously, if the daily job ran before the hourly/4h
+jobs had produced a fresh snapshot, or a snapshot job failed silently, the daily rollup would
+either read stale data with no record that it was stale, or (worse) have nothing to distinguish
+"the snapshot hasn't changed" from "the snapshot job didn't run." Reading from history makes the
+dependency explicit in the data itself (`_snapshot_at` on the row consumed) rather than in
+schedule timing.
 
 ---
 

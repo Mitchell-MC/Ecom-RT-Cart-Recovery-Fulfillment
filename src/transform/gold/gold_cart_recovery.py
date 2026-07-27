@@ -2,6 +2,12 @@
 docs/metric-glossary.md's priority_score. Batch job, scheduled hourly (see
 orchestration/databricks/resources/gold_job.yml), reading the streaming-fed silver.clickstream_
 events table plus silver.orders for customer purchase history.
+
+Also appends every run's scored rows to gold.cart_recovery_signal_history (insert-only, one row
+per cart per run) -- cart_recovery_signal itself stays overwrite-mode because DirectQuery/ops
+consumers (bi/powerbi/data-model.md) need "what's abandoned right now", not history. The history
+table is what gold_exec_summary_marts.py reads for trend/audit purposes instead of depending on
+being scheduled after (but not too long after) this job -- see docs/architecture.md.
 """
 
 from __future__ import annotations
@@ -169,6 +175,12 @@ def main():
     ).saveAsTable(target_table)
 
     row_count = scored.count()
+
+    history_table = cfg.table("gold", "cart_recovery_signal_history")
+    scored.withColumn("_snapshot_at", F.col("_gold_computed_at")).write.format(
+        "delta"
+    ).mode("append").option("mergeSchema", "true").saveAsTable(history_table)
+
     log_run(
         spark,
         cfg,
