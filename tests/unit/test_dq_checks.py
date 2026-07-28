@@ -1,8 +1,10 @@
 from datetime import datetime, timedelta, timezone
 
+import pytest
 from dq_checks import (
     DQRule,
     apply_dq_rules,
+    assert_unique,
     dedupe_last_write_wins,
     non_negative,
     not_null,
@@ -65,3 +67,14 @@ def test_dedupe_last_write_wins(spark):
 
     result = {row["key"]: row["payload"] for row in deduped.collect()}
     assert result == {"a": "new", "b": "only"}
+
+
+def test_assert_unique_passes_when_grain_has_no_duplicates(spark):
+    df = spark.createDataFrame([{"id": "1"}, {"id": "2"}])
+    assert_unique(df, ["id"], context="test_table")  # should not raise
+
+
+def test_assert_unique_raises_on_duplicate_keys(spark):
+    df = spark.createDataFrame([{"id": "1"}, {"id": "1"}, {"id": "2"}])
+    with pytest.raises(ValueError, match="test_table"):
+        assert_unique(df, ["id"], context="test_table")

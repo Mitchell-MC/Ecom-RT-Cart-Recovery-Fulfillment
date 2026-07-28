@@ -92,6 +92,18 @@ def dedupe_last_write_wins(
     )
 
 
+def assert_unique(df: DataFrame, key_cols: list[str], *, context: str) -> None:
+    """Fails fast if `df` has more than one row per `key_cols` -- the grain contract documented
+    in docs/metric-glossary.md. Catches an upstream duplicate (e.g. a join fan-out from a source
+    that unexpectedly has a duplicated key) before it ships as a silently-wrong gold table.
+    """
+    dupes = df.groupBy(*key_cols).count().filter(F.col("count") > 1)
+    if dupes.head(1):
+        raise ValueError(
+            f"{context}: expected one row per {key_cols}, found duplicate keys"
+        )
+
+
 def write_quarantine(quarantine_df: DataFrame, target_table: str) -> None:
     if quarantine_df.head(1):
         (

@@ -20,8 +20,42 @@ from pyspark.sql import functions as F
 sys.path.append(
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../common")
 )
+sys.path.append(
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../quality")
+)
 from audit import log_run  # noqa: E402
+from catalog_docs import TableDoc, apply_table_doc  # noqa: E402
 from config import get_config  # noqa: E402
+from dq_checks import assert_unique  # noqa: E402
+
+# Grain contract for gold.fulfillment_risk_signal / _history, per docs/metric-glossary.md #6.
+GRAIN = ["order_id"]
+
+TABLE_DOC = TableDoc(
+    comment=(
+        "One row per open (in-transit, not cancelled) order (grain: order_id), ranked by "
+        "fulfillment_risk_score. Overwritten each run -- see docs/metric-glossary.md #6."
+    ),
+    columns={
+        "order_id": "Business key for the order; the grain of this table.",
+        "days_to_promise": "Calendar days between today and promised_delivery_date.",
+        "fulfillment_risk_score": (
+            "0-100 heuristic blending time pressure, inventory, and carrier risk. "
+            "See docs/metric-glossary.md #6 for the formula."
+        ),
+    },
+)
+
+HISTORY_TABLE_DOC = TableDoc(
+    comment=(
+        "Append-only periodic-snapshot history of gold.fulfillment_risk_signal, one row per "
+        "order_id per run. See docs/metric-glossary.md 'History tables'."
+    ),
+    columns={
+        **TABLE_DOC.columns,
+        "_snapshot_at": "Timestamp of the run this row is a point-in-time copy of.",
+    },
+)
 
 
 def open_orders_with_shipment(orders: DataFrame, shipments: DataFrame) -> DataFrame:
@@ -123,11 +157,13 @@ def main():
     open_orders = open_orders_with_shipment(orders, shipments)
     with_inventory = with_inventory_risk(open_orders, order_items, inventory)
     scored = score(with_inventory)
+    assert_unique(scored, GRAIN, context="gold.fulfillment_risk_signal")
 
     target_table = cfg.table("gold", "fulfillment_risk_signal")
     scored.write.format("delta").mode("overwrite").option(
         "overwriteSchema", "true"
     ).saveAsTable(target_table)
+    apply_table_doc(spark, target_table, TABLE_DOC)
 
     row_count = scored.count()
 
@@ -135,6 +171,7 @@ def main():
     scored.withColumn("_snapshot_at", F.col("_gold_computed_at")).write.format(
         "delta"
     ).mode("append").option("mergeSchema", "true").saveAsTable(history_table)
+    apply_table_doc(spark, history_table, HISTORY_TABLE_DOC)
 
     log_run(
         spark,
