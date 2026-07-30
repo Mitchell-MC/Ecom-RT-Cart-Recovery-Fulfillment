@@ -54,9 +54,11 @@ worth the scope increase for a portfolio-scale event volume.
 Streaming micro-batches (bronze: every 1 min) naturally produce many small files. Delta's
 `delta.autoOptimize.optimizeWrite` and `delta.autoOptimize.autoCompact` table properties are
 enabled on every bronze/silver table (set at table-creation time in the ingestion jobs) so
-compaction happens incrementally rather than requiring a separate maintenance job — the
-`main_pipeline` Workflow additionally runs a nightly `OPTIMIZE ... ZORDER BY (...)` task (see
-`orchestration/databricks/resources/gold_job.yml`) for the columns the benchmark below justifies.
+compaction happens incrementally rather than requiring a separate maintenance job — a standalone
+`maintenance_optimize` job additionally runs a nightly `OPTIMIZE ... ZORDER BY (...)` task (see
+`orchestration/databricks/resources/maintenance_job.yml` and
+`orchestration/databricks/sql/optimize_maintenance.sql`) for the columns the benchmark below
+justifies.
 
 ## 5. Benchmark: partition-only vs. partition + Z-ORDER
 

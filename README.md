@@ -70,9 +70,10 @@ Full write-up: [docs/architecture.md](docs/architecture.md). Distributed-compute
 ## Repo layout
 
 ```
-docs/                   Charter, metric glossary, architecture, tradeoffs, demo scripts
+docs/                   Charter, metric glossary, architecture, tradeoffs
 infra/terraform/        Modules + dev/staging environments (Azure Databricks + Unity Catalog)
 data_generation/        Synthetic clickstream + order-domain data generators
+src/common/             Shared env/catalog config, audit logging, Unity Catalog table docs
 src/ingestion/          Bronze layer: Structured Streaming (clickstream) + batch (order domain)
 src/transform/silver/   Standardization, dedup, keying
 src/transform/gold/     Cart-recovery signal, fulfillment-risk signal, exec summary marts
@@ -82,6 +83,7 @@ orchestration/airflow/     Stretch: Airflow DAG mirroring the same pipeline
 .github/workflows/      CI (lint/test), deploy-dev, promote-staging
 tests/                  Unit tests for silver/gold logic and DQ checks
 bi/powerbi/             Data model, DAX measures, and report layout for the ROI dashboard
+bi/local_preview/       Local (no-Databricks) CSV preview of the gold layer for BI iteration
 ```
 
 ## Status
@@ -149,9 +151,3 @@ than overlooked:
   reporting requirements, that's the trigger to introduce hubs (business keys: `customer_id`,
   `order_id`, `cart_id`), links (e.g. cart-to-order), and satellites (the scored attributes,
   insert-only) rather than growing the current snapshot-table pattern further.
-
-## Talking points
-
-If you're using this repo for interviews, start with
-[docs/star-talking-points.md](docs/star-talking-points.md) and the two demo scripts in `docs/`
-(10-minute and 30-minute variants).

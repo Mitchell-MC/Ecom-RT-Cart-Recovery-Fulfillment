@@ -167,4 +167,10 @@ bronze→silver boundary:
 | `promised_delivery_date` | not null for orders past `checkout_complete` | warn (excluded from fulfillment_risk until backfilled) |
 | duplicate `(cart_id, event_type, event_timestamp)` | deduped, last-write-wins on `_ingested_at` | dedup, not a failure |
 
+A second gate runs at the silver→gold boundary: `assert_unique()` fails the job if
+`gold.cart_recovery_signal` or `gold.fulfillment_risk_signal` would be written with more than one
+row per its declared grain (`cart_id` / `order_id` — see sections 3 and 6 above), catching a
+source-side duplicate key that fans out through a join before it ships as a silently-wrong gold
+table.
+
 See [Data Quality Gates](../src/quality/dq_checks.py) for the executable version of this table.
