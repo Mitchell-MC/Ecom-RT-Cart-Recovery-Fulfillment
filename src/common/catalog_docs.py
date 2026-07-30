@@ -27,4 +27,7 @@ def apply_table_doc(spark: SparkSession, table_fqn: str, doc: TableDoc) -> None:
 
 
 def _escape(text: str) -> str:
-    return text.replace("'", "''")
+    # Spark SQL string literals use Hive-style escaping, where backslash is also a
+    # metacharacter -- escape it first so a trailing/embedded backslash can't unescape
+    # the quote-doubling below and break out of the literal.
+    return text.replace("\\", "\\\\").replace("'", "''")

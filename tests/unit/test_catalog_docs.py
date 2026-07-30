@@ -43,3 +43,14 @@ def test_apply_table_doc_escapes_single_quotes():
     apply_table_doc(spark, "gold.t", doc)
 
     assert spark.statements == ["COMMENT ON TABLE gold.t IS 'Cart''s value'"]
+
+
+def test_apply_table_doc_escapes_backslashes():
+    spark = _RecordingSpark()
+    doc = TableDoc(comment="Windows path C:\\data\\", columns={})
+
+    apply_table_doc(spark, "gold.t", doc)
+
+    assert spark.statements == [
+        "COMMENT ON TABLE gold.t IS 'Windows path C:\\\\data\\\\'"
+    ]
