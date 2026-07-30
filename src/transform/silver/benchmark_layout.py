@@ -29,14 +29,12 @@ def build_zorder_copy(
     spark: SparkSession, source_table: str, target_table: str
 ) -> None:
     spark.sql(f"DROP TABLE IF EXISTS {target_table}")
-    spark.sql(
-        f"""
+    spark.sql(f"""
         CREATE TABLE {target_table}
         USING DELTA
         PARTITIONED BY (event_date)
         AS SELECT * FROM {source_table}
-    """
-    )
+    """)
     spark.sql(f"OPTIMIZE {target_table} ZORDER BY (cart_id)")
 
 
@@ -63,7 +61,9 @@ def time_query(spark: SparkSession, table: str, cart_id: str, start_date: str) -
           AND event_date >= date_sub(:start_date, 7)
     """
     started = time.perf_counter()
-    spark.sql(query, args={"cart_id": cart_id, "start_date": start_date}).count()  # force execution
+    spark.sql(
+        query, args={"cart_id": cart_id, "start_date": start_date}
+    ).count()  # force execution
     return time.perf_counter() - started
 
 
