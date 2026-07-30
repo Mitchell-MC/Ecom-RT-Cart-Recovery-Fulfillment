@@ -59,11 +59,11 @@ def time_query(spark: SparkSession, table: str, cart_id: str, start_date: str) -
     spark.sql("CLEAR CACHE")
     query = f"""
         SELECT * FROM {table}
-        WHERE cart_id = '{cart_id}'
-          AND event_date >= date_sub('{start_date}', 7)
+        WHERE cart_id = :cart_id
+          AND event_date >= date_sub(:start_date, 7)
     """
     started = time.perf_counter()
-    spark.sql(query).count()  # force execution
+    spark.sql(query, args={"cart_id": cart_id, "start_date": start_date}).count()  # force execution
     return time.perf_counter() - started
 
 
