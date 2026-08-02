@@ -7,6 +7,7 @@ from dq_checks import (
     assert_unique,
     dedupe_last_write_wins,
     non_negative,
+    not_in,
     not_null,
     within_clock_skew,
 )
@@ -54,6 +55,28 @@ def test_apply_dq_rules_warn_does_not_quarantine(spark):
     assert clean_df.count() == 1
     assert quarantine_df.count() == 0
     assert clean_df.collect()[0]["_dq_warnings"] == ["missing_value"]
+
+
+def test_not_in_flags_values_outside_allowed_list(spark):
+    schema = StructType(
+        [StructField("id", StringType()), StructField("category", StringType())]
+    )
+    rows = [
+        {"id": "1", "category": "apparel"},  # allowed
+        {"id": "2", "category": "crypto"},  # not allowed
+        {"id": "3", "category": None},  # null never triggers
+    ]
+    df = spark.createDataFrame(rows, schema=schema)
+    rules = [
+        DQRule("unexpected_category", "warn", not_in("category", ["apparel", "footwear"]))
+    ]
+    clean_df, quarantine_df = apply_dq_rules(df, rules)
+
+    assert quarantine_df.count() == 0  # warn severity never quarantines
+    warnings = {row["id"]: row["_dq_warnings"] for row in clean_df.collect()}
+    assert warnings["1"] == []
+    assert warnings["2"] == ["unexpected_category"]
+    assert warnings["3"] == []
 
 
 def test_dedupe_last_write_wins(spark):

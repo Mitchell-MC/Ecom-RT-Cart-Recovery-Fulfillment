@@ -34,6 +34,12 @@ def non_negative(col: str) -> Column:
     return F.col(col).isNotNull() & (F.col(col) < 0)
 
 
+def not_in(col: str, allowed: list[str]) -> Column:
+    """Flags rows where `col` is a value outside `allowed`. Nulls never trigger this rule --
+    pair it with `not_null` separately if the column is also required."""
+    return F.col(col).isNotNull() & ~F.col(col).isin(allowed)
+
+
 def within_clock_skew(col: str, past_days: int = 1, future_minutes: int = 5) -> Column:
     too_old = F.col(col) < F.expr(f"current_timestamp() - INTERVAL {past_days} DAYS")
     too_new = F.col(col) > F.expr(

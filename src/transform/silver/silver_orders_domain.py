@@ -23,7 +23,17 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(os.path.join(_THIS_DIR, "../../common"))
 sys.path.append(os.path.join(_THIS_DIR, "../../quality"))
 from config import get_config  # noqa: E402
-from dq_checks import DQRule, apply_dq_rules, write_quarantine  # noqa: E402
+from dq_checks import DQRule, apply_dq_rules, not_in, write_quarantine  # noqa: E402
+
+# Known-value sets for categorical columns, mirroring data_generation/seed_catalog.py and
+# generate_orders_domain.py. A value outside these lists is a "warn", not a "fail": the goal is
+# to surface catalog/business drift (new category, new channel) for review, not to quarantine
+# otherwise-valid revenue rows.
+ALLOWED_CATEGORIES = ["apparel", "footwear", "electronics", "home", "beauty", "outdoor"]
+ALLOWED_CHANNELS = ["web", "phone", "customer_service"]
+ALLOWED_CURRENCIES = ["USD", "CAD", "EUR"]
+ALLOWED_ORDER_STATUSES = ["delivered", "in_transit", "cancelled"]
+ALLOWED_SHIPMENT_STATUSES = ["delivered", "in_transit"]
 
 
 def _customers_standardize(df: DataFrame) -> DataFrame:
@@ -58,6 +68,9 @@ def _orders_dq_rules() -> list[DQRule]:
             "warn",
             F.col("promised_delivery_date").isNull() & (F.col("status") != "cancelled"),
         ),
+        DQRule("unexpected_channel", "warn", not_in("channel", ALLOWED_CHANNELS)),
+        DQRule("unexpected_currency", "warn", not_in("currency", ALLOWED_CURRENCIES)),
+        DQRule("unexpected_status", "warn", not_in("status", ALLOWED_ORDER_STATUSES)),
     ]
 
 
@@ -74,12 +87,23 @@ def _order_items_dq_rules() -> list[DQRule]:
 
 def _products_dq_rules() -> list[DQRule]:
     return [
-        DQRule("negative_price", "fail", F.col("price").isNull() | (F.col("price") < 0))
+        DQRule(
+            "negative_price", "fail", F.col("price").isNull() | (F.col("price") < 0)
+        ),
+        DQRule("unexpected_category", "warn", not_in("category", ALLOWED_CATEGORIES)),
     ]
 
 
 def _inventory_dq_rules() -> list[DQRule]:
     return [DQRule("negative_on_hand_qty", "fail", F.col("on_hand_qty") < 0)]
+
+
+def _shipments_dq_rules() -> list[DQRule]:
+    return [
+        DQRule(
+            "unexpected_status", "warn", not_in("status", ALLOWED_SHIPMENT_STATUSES)
+        )
+    ]
 
 
 @dataclass(frozen=True)
@@ -96,7 +120,7 @@ TABLE_SPECS: list[SilverTableSpec] = [
     SilverTableSpec("inventory", ("sku", "warehouse_id"), dq_rules=_inventory_dq_rules),
     SilverTableSpec("orders", ("order_id",), _orders_standardize, _orders_dq_rules),
     SilverTableSpec("order_items", ("order_id", "sku"), dq_rules=_order_items_dq_rules),
-    SilverTableSpec("shipments", ("order_id",)),
+    SilverTableSpec("shipments", ("order_id",), dq_rules=_shipments_dq_rules),
 ]
 
 
