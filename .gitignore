@@ -44,6 +44,13 @@ bi/local_preview/output/
 *.delta
 _delta_log/
 
+# Power BI Desktop project (local-only cache/settings; the .pbip/.tmdl/.pbir
+# definitions are the source-controlled part)
+bi/powerbi/project/**/.pbi/
+bi/powerbi/project/**/*.abf
+bi/powerbi/project/**/TMDLScripts/
+bi/powerbi/project/**/DAXQueries/
+
 # Secrets / local env
 .env
 .env.*

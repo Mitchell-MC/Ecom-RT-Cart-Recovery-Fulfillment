@@ -1,0 +1,110 @@
+table gold_exec_summary_daily
+	lineageTag: 7241a9ed-5184-4ac4-9344-b79c1ec6b29d
+
+	measure 'Recoverable Revenue (Trailing N)' =
+			VAR NDays = [SelectedDays]
+			RETURN
+			    CALCULATE (
+			        SUM ( gold_exec_summary_daily[recoverable_revenue] ),
+			        DATESINPERIOD (
+			            dim_date[Date],
+			            MAX ( dim_date[Date] ),
+			            -NDays,
+			            DAY
+			        )
+			    )
+		formatString: $ #,##0
+		lineageTag: 6c51ec46-f898-45d7-ba8b-56d5ab3d34f5
+
+	measure 'Cart Recovery Rate WoW %' =
+			VAR ThisWeek = [Recoverable Revenue (Trailing N)]
+			VAR LastWeek =
+			    CALCULATE (
+			        [Recoverable Revenue (Trailing N)],
+			        DATEADD ( dim_date[Date], -7, DAY )
+			    )
+			RETURN
+			    DIVIDE ( ThisWeek - LastWeek, LastWeek )
+		formatString: 0.0%
+		lineageTag: b87bfab9-bdd2-4656-8448-02d082c6ec55
+
+	measure 'Delayed-Order Revenue Risk (Trailing N)' =
+			VAR NDays = [SelectedDays]
+			RETURN
+			    CALCULATE (
+			        SUM ( gold_exec_summary_daily[delayed_order_revenue_risk] ),
+			        DATESINPERIOD ( dim_date[Date], MAX ( dim_date[Date] ), -NDays, DAY )
+			    )
+		formatString: $ #,##0
+		lineageTag: f81ca95c-980e-4e75-bde3-d1809c338070
+
+	measure 'On-Time Delivery Rate' =
+			AVERAGE ( gold_exec_summary_daily[on_time_delivery_rate] )
+		formatString: 0.0%
+		lineageTag: eedee9b3-0646-4aa3-ae3f-7eec407aa9d9
+
+	measure 'On-Time Delivery Rate % (formatted)' =
+			FORMAT ( [On-Time Delivery Rate], "0.0%" )
+		lineageTag: af95231f-4026-4941-909b-fb0440c44f1c
+
+	measure 'On-Time Delivery Rate Trend' =
+			CALCULATE (
+			    [On-Time Delivery Rate],
+			    DATESINPERIOD ( dim_date[Date], MAX ( dim_date[Date] ), -[SelectedDays], DAY )
+			)
+		formatString: 0.0%
+		lineageTag: 86a015b7-7dde-423a-a086-51ec4947d647
+
+	measure 'Median Conversion Lag (Minutes)' =
+			AVERAGE ( gold_exec_summary_daily[conversion_lag_median_minutes] )
+		formatString: 0.0
+		lineageTag: 79703ed1-e7b3-4ef1-a121-970611b8c97e
+
+
+	column metric_date
+		dataType: dateTime
+		formatString: Short Date
+		lineageTag: 90ec77c6-4817-4845-be26-b75ab7dd5841
+		summarizeBy: none
+		sourceColumn: metric_date
+
+		annotation UnderlyingDateTimeDataType = Date
+
+	column recoverable_revenue
+		dataType: decimal
+		formatString: $ #,##0.00
+		lineageTag: a01b1d8e-633a-4598-a1a4-bdd779d661f1
+		summarizeBy: none
+		sourceColumn: recoverable_revenue
+
+	column delayed_order_revenue_risk
+		dataType: decimal
+		formatString: $ #,##0.00
+		lineageTag: 7691c094-7591-48a1-9610-40d72217bb11
+		summarizeBy: none
+		sourceColumn: delayed_order_revenue_risk
+
+	column on_time_delivery_rate
+		dataType: double
+		formatString: 0.0%
+		lineageTag: 5955552f-19d0-49eb-8a94-ba5f354b1946
+		summarizeBy: none
+		sourceColumn: on_time_delivery_rate
+
+	column conversion_lag_median_minutes
+		dataType: double
+		formatString: 0.0
+		lineageTag: 4891e677-29b3-4570-989d-41de2eac93d1
+		summarizeBy: none
+		sourceColumn: conversion_lag_median_minutes
+
+	partition gold_exec_summary_daily = m
+		mode: import
+		source = ```
+				let
+				    Source = Csv.Document(File.Contents(GoldPreviewFolder & "\gold_exec_summary_daily.csv"), [Delimiter=",", Columns=5, Encoding=65001, QuoteStyle=QuoteStyle.None]),
+				    #"Promoted Headers" = Table.PromoteHeaders(Source, [PromoteAllScalars=true]),
+				    #"Changed Type" = Table.TransformColumnTypes(#"Promoted Headers", {{"metric_date", type date}, {"recoverable_revenue", Currency.Type}, {"delayed_order_revenue_risk", Currency.Type}, {"on_time_delivery_rate", type number}, {"conversion_lag_median_minutes", type number}})
+				in
+				    #"Changed Type"
+				```

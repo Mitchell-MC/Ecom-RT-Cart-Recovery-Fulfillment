@@ -1,0 +1,18 @@
+model Model
+	culture: en-US
+	defaultPowerBIDataSourceVersion: powerBI_V3
+	discourageImplicitMeasures
+	sourceQueryCulture: en-US
+	dataAccessOptions
+		legacyRedirects
+		returnErrorValuesAsNull
+
+annotation PBI_QueryOrder = ["GoldPreviewFolder","gold_cart_recovery_signal","gold_fulfillment_risk_signal","gold_exec_summary_daily","silver_customers","silver_products","dim_date","Days"]
+
+ref table gold_cart_recovery_signal
+ref table gold_fulfillment_risk_signal
+ref table gold_exec_summary_daily
+ref table silver_customers
+ref table silver_products
+ref table dim_date
+ref table Days

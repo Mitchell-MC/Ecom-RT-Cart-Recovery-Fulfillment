@@ -1,0 +1,109 @@
+table gold_fulfillment_risk_signal
+	lineageTag: da26aa1a-c2cb-40a2-98f3-32f0fdffb3db
+
+	measure 'Delayed-Order Revenue Risk (Live)' =
+			CALCULATE (
+			    SUM ( gold_fulfillment_risk_signal[order_total_usd] ),
+			    gold_fulfillment_risk_signal[fulfillment_risk_score] >= 60
+			)
+		formatString: $ #,##0
+		lineageTag: 2a5d8858-4a1f-4394-b80f-3d754c826c54
+
+	measure 'At-Risk Order Count' =
+			CALCULATE (
+			    COUNTROWS ( gold_fulfillment_risk_signal ),
+			    gold_fulfillment_risk_signal[fulfillment_risk_score] >= 60
+			)
+		formatString: #,##0
+		lineageTag: a7129f7b-866b-49e1-a700-c499a6a01d2f
+
+	measure 'Fulfillment Risk Tier' =
+			SWITCH (
+			    TRUE (),
+			    SELECTEDVALUE ( gold_fulfillment_risk_signal[fulfillment_risk_score] ) >= 80, "🔴 Escalate",
+			    SELECTEDVALUE ( gold_fulfillment_risk_signal[fulfillment_risk_score] ) >= 60, "🟠 Watch",
+			    SELECTEDVALUE ( gold_fulfillment_risk_signal[fulfillment_risk_score] ) >= 40, "🟡 Monitor",
+			    "⚪ Low"
+			)
+		lineageTag: 6ecff140-d6e5-41ca-9c5b-1e5a8a9466d7
+
+
+	column order_id
+		dataType: string
+		lineageTag: 71f2ea1c-531e-466c-a3ec-8f5eb80c3291
+		summarizeBy: none
+		sourceColumn: order_id
+
+	column customer_id
+		dataType: string
+		lineageTag: 75122975-4f34-4fcb-863d-adff412fc92c
+		summarizeBy: none
+		sourceColumn: customer_id
+
+	column order_total_usd
+		dataType: decimal
+		formatString: $ #,##0.00
+		lineageTag: d30d9c56-605e-4cee-a690-1359c15da102
+		summarizeBy: none
+		sourceColumn: order_total_usd
+
+	column carrier
+		dataType: string
+		lineageTag: f23e0b1c-05fe-47d5-9e54-f749f794b86b
+		summarizeBy: none
+		sourceColumn: carrier
+
+	column promised_delivery_date
+		dataType: dateTime
+		formatString: Short Date
+		lineageTag: ae6124b5-7dd8-4527-a065-4bdbb279e6f4
+		summarizeBy: none
+		sourceColumn: promised_delivery_date
+
+		annotation UnderlyingDateTimeDataType = Date
+
+	column days_to_promise
+		dataType: int64
+		formatString: 0
+		lineageTag: 76c653e2-cd3f-4db0-bc4a-27750095795a
+		summarizeBy: none
+		sourceColumn: days_to_promise
+
+	column time_pressure_score
+		dataType: double
+		formatString: 0.0
+		lineageTag: 4eaa1aaa-7e0e-4dc9-a94b-8bdab5dc1085
+		summarizeBy: none
+		sourceColumn: time_pressure_score
+
+	column inventory_risk_score
+		dataType: double
+		formatString: 0.0
+		lineageTag: cdfc1a6e-a80e-4f47-9436-7e5ed798964d
+		summarizeBy: none
+		sourceColumn: inventory_risk_score
+
+	column carrier_risk_score
+		dataType: double
+		formatString: 0.0
+		lineageTag: 783e2614-ee6c-46fc-b9c8-e969df87b2f2
+		summarizeBy: none
+		sourceColumn: carrier_risk_score
+
+	column fulfillment_risk_score
+		dataType: double
+		formatString: 0.0
+		lineageTag: cf6b72d9-7895-4a3b-84d1-4f704f45dc23
+		summarizeBy: none
+		sourceColumn: fulfillment_risk_score
+
+	partition gold_fulfillment_risk_signal = m
+		mode: import
+		source = ```
+				let
+				    Source = Csv.Document(File.Contents(GoldPreviewFolder & "\gold_fulfillment_risk_signal.csv"), [Delimiter=",", Columns=10, Encoding=65001, QuoteStyle=QuoteStyle.None]),
+				    #"Promoted Headers" = Table.PromoteHeaders(Source, [PromoteAllScalars=true]),
+				    #"Changed Type" = Table.TransformColumnTypes(#"Promoted Headers", {{"order_id", type text}, {"customer_id", type text}, {"order_total_usd", Currency.Type}, {"carrier", type text}, {"promised_delivery_date", type date}, {"days_to_promise", Int64.Type}, {"time_pressure_score", type number}, {"inventory_risk_score", type number}, {"carrier_risk_score", type number}, {"fulfillment_risk_score", type number}})
+				in
+				    #"Changed Type"
+				```

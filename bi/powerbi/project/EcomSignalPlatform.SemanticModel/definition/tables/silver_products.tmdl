@@ -1,0 +1,39 @@
+table silver_products
+	lineageTag: dad086e3-82ab-4561-8c73-74603a41caae
+
+
+	column sku
+		dataType: string
+		lineageTag: a22ffbac-64b8-424d-9394-7c62a0be2a97
+		summarizeBy: none
+		sourceColumn: sku
+
+	column name
+		dataType: string
+		lineageTag: 37832d3e-bada-47af-aaed-73c09477c2e8
+		summarizeBy: none
+		sourceColumn: name
+
+	column category
+		dataType: string
+		lineageTag: caa41889-c19d-42a1-b2fc-31732bf2b175
+		summarizeBy: none
+		sourceColumn: category
+
+	column price
+		dataType: decimal
+		formatString: $ #,##0.00
+		lineageTag: 4cba48a7-40c1-4452-bcf5-1a993c3070dd
+		summarizeBy: none
+		sourceColumn: price
+
+	partition silver_products = m
+		mode: import
+		source = ```
+				let
+				    Source = Csv.Document(File.Contents(GoldPreviewFolder & "\silver_products.csv"), [Delimiter=",", Columns=4, Encoding=65001, QuoteStyle=QuoteStyle.None]),
+				    #"Promoted Headers" = Table.PromoteHeaders(Source, [PromoteAllScalars=true]),
+				    #"Changed Type" = Table.TransformColumnTypes(#"Promoted Headers", {{"sku", type text}, {"name", type text}, {"category", type text}, {"price", Currency.Type}})
+				in
+				    #"Changed Type"
+				```

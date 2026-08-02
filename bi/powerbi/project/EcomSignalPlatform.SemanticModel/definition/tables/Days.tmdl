@@ -1,0 +1,27 @@
+table Days
+	lineageTag: 08220cd7-aedf-456a-a917-6c5fbb186a57
+
+	measure 'SelectedDays' =
+			SELECTEDVALUE ( 'Days'[DaysValue], 7 )
+		lineageTag: 53de5089-c0d6-44eb-aeab-020a45251b7b
+
+
+	column DaysValue
+		dataType: int64
+		formatString: 0
+		lineageTag: 10ff248f-04a9-433c-b961-e943b932af20
+		summarizeBy: none
+		sourceColumn: DaysValue
+
+	partition Days = calculated
+		mode: import
+		source = ```
+				DATATABLE (
+				    "DaysValue", INTEGER,
+				    {
+				        {1},
+				        {7},
+				        {30}
+				    }
+				)
+				```
