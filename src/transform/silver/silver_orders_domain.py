@@ -100,9 +100,7 @@ def _inventory_dq_rules() -> list[DQRule]:
 
 def _shipments_dq_rules() -> list[DQRule]:
     return [
-        DQRule(
-            "unexpected_status", "warn", not_in("status", ALLOWED_SHIPMENT_STATUSES)
-        )
+        DQRule("unexpected_status", "warn", not_in("status", ALLOWED_SHIPMENT_STATUSES))
     ]
 
 

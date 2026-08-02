@@ -68,7 +68,9 @@ def test_not_in_flags_values_outside_allowed_list(spark):
     ]
     df = spark.createDataFrame(rows, schema=schema)
     rules = [
-        DQRule("unexpected_category", "warn", not_in("category", ["apparel", "footwear"]))
+        DQRule(
+            "unexpected_category", "warn", not_in("category", ["apparel", "footwear"])
+        )
     ]
     clean_df, quarantine_df = apply_dq_rules(df, rules)
 

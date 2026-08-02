@@ -121,7 +121,9 @@ def test_build_dq_rules_warns_on_unexpected_categorical_values(spark):
     clean_df, quarantine_df = apply_dq_rules(df, build_dq_rules())
 
     assert quarantine_df.count() == 0  # all new rules are warn severity
-    warnings = {row["session_id"]: set(row["_dq_warnings"]) for row in clean_df.collect()}
+    warnings = {
+        row["session_id"]: set(row["_dq_warnings"]) for row in clean_df.collect()
+    }
     assert warnings["s1"] == set()
     assert warnings["s2"] == {"unexpected_event_type"}
     assert warnings["s3"] == {"unexpected_device_type"}
