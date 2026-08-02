@@ -1,0 +1,11 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/fabric/gitIntegration/platformProperties/2.0.0/schema.json",
+  "metadata": {
+    "type": "Report",
+    "displayName": "EcomSignalPlatform"
+  },
+  "config": {
+    "version": "2.0",
+    "logicalId": "9471b2e0-5b80-4642-9f20-9125dd64d66c"
+  }
+}

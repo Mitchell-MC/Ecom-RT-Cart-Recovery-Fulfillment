@@ -1,0 +1,11 @@
+relationship 7a3ac0d8-b3b0-4607-abbd-a80e13650267
+	fromColumn: gold_exec_summary_daily.metric_date
+	toColumn: dim_date.Date
+
+relationship 5345189c-9dd4-423c-9b38-9b1ce98ef538
+	fromColumn: gold_cart_recovery_signal.customer_id
+	toColumn: silver_customers.customer_id
+
+relationship ed2c6664-bea8-43f9-9133-5bd93c0b27fa
+	fromColumn: gold_fulfillment_risk_signal.customer_id
+	toColumn: silver_customers.customer_id

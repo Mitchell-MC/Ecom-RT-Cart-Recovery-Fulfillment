@@ -22,8 +22,19 @@ doesn't ripple into every consumer of `customers`.
 
 **Gold** (`src/transform/gold/`) is where business logic and denormalization happen —
 `gold_cart_recovery.py` and `gold_fulfillment_risk.py` implement the scoring formulas from the
-metric glossary, and `gold_exec_summary_marts.py` turns the two point-in-time signal snapshots
-into a daily trend table for BI.
+metric glossary. Each writes two tables: an overwrite-mode current-snapshot table for the
+DirectQuery ops consumers, and an insert-only `*_history` table (periodic snapshot fact — see
+[docs/metric-glossary.md](metric-glossary.md#history-tables-periodic-snapshot-fact-pattern)) so
+history survives being overwritten. `gold_exec_summary_marts.py` reads those history tables to
+build the daily trend table for BI, rather than depending on its own schedule landing after a
+fresh snapshot. Immediately before each write, both jobs call `assert_unique()`
+(`src/quality/dq_checks.py`) against their documented grain (`cart_id` / `order_id`) — a fast-fail
+guard against a source-side duplicate key silently fanning out a join (e.g. a duplicated
+`shipments.order_id`) into a wrong-grain gold table, which a plain row-count check in
+`gold.pipeline_audit_log` wouldn't catch. `src/common/catalog_docs.py` then pushes short
+table/column descriptions, hand-paraphrased from the metric glossary, into Unity Catalog via
+`COMMENT ON TABLE`/`ALTER COLUMN ... COMMENT`, so the contract is visible directly in Catalog
+Explorer and not only in this markdown.
 
 ## Streaming vs. batch, and why both
 
@@ -101,8 +112,10 @@ How each phase's output was checked, and what "done" means for each:
 - **KPI reconciliation** — every gold-layer formula traces to a numbered section in
   `docs/metric-glossary.md`; a reviewer can diff the code against the doc directly.
 - **Data quality** — `src/quality/dq_checks.py` enforces completeness, uniqueness (via dedup),
-  timestamp validity (clock-skew guard), and referential checks at the bronze→silver boundary;
-  `tests/unit/test_dq_checks.py` covers the rule logic in isolation.
+  timestamp validity (clock-skew guard), and referential checks at the bronze→silver boundary,
+  plus a grain-level `assert_unique()` guard at the silver→gold boundary (one row per `cart_id` /
+  `order_id` before each gold write); `tests/unit/test_dq_checks.py` covers the rule logic in
+  isolation.
 - **Streaming stability** — checkpointed Structured Streaming (`checkpointLocation` on every
   streaming job) gives deterministic reprocessing and crash recovery by construction; the
   continuous-job `max_retries`/auto-restart behavior in `streaming_jobs.yml` is the operational
@@ -119,4 +132,3 @@ How each phase's output was checked, and what "done" means for each:
 - **BI/gold parity** — `bi/powerbi/data-model.md` documents storage mode per table specifically
   so DirectQuery tables (`cart_recovery_signal`, `fulfillment_risk_signal`) never silently
   diverge from gold; there's nothing to reconcile because Power BI reads gold directly for those.
-- **End-to-end demo** — `docs/demo-script-10min.md` / `docs/demo-script-30min.md`.

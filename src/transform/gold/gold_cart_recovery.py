@@ -2,6 +2,12 @@
 docs/metric-glossary.md's priority_score. Batch job, scheduled hourly (see
 orchestration/databricks/resources/gold_job.yml), reading the streaming-fed silver.clickstream_
 events table plus silver.orders for customer purchase history.
+
+Also appends every run's scored rows to gold.cart_recovery_signal_history (insert-only, one row
+per cart per run) -- cart_recovery_signal itself stays overwrite-mode because DirectQuery/ops
+consumers (bi/powerbi/data-model.md) need "what's abandoned right now", not history. The history
+table is what gold_exec_summary_marts.py reads for trend/audit purposes instead of depending on
+being scheduled after (but not too long after) this job -- see docs/architecture.md.
 """
 
 from __future__ import annotations
@@ -16,8 +22,13 @@ from pyspark.sql import functions as F
 sys.path.append(
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../common")
 )
+sys.path.append(
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../quality")
+)
 from audit import log_run  # noqa: E402
+from catalog_docs import TableDoc, apply_table_doc  # noqa: E402
 from config import get_config  # noqa: E402
+from dq_checks import assert_unique  # noqa: E402
 
 CART_EVENT_TYPES = [
     "add_to_cart",
@@ -27,6 +38,41 @@ CART_EVENT_TYPES = [
 ]
 CART_ABANDON_THRESHOLD_MINUTES = 30
 CART_STALE_HORIZON_DAYS = 7
+
+# Grain contract for gold.cart_recovery_signal / _history, per docs/metric-glossary.md #1 and #3.
+GRAIN = ["cart_id"]
+
+TABLE_DOC = TableDoc(
+    comment=(
+        "One row per currently-abandoned cart (grain: cart_id), ranked by recovery "
+        "priority_score. Overwritten each run -- see docs/metric-glossary.md #1 and #3."
+    ),
+    columns={
+        "cart_id": "Business key for the cart; the grain of this table.",
+        "recoverable_cart_value": (
+            "Net value of active (not removed) line items in the cart. "
+            "See docs/metric-glossary.md #2."
+        ),
+        "minutes_since_last_activity": (
+            "Minutes between now and the cart's last add/remove/checkout event."
+        ),
+        "priority_score": (
+            "0-100 heuristic blending recency/value/loyalty scores. "
+            "See docs/metric-glossary.md #3 for the formula."
+        ),
+    },
+)
+
+HISTORY_TABLE_DOC = TableDoc(
+    comment=(
+        "Append-only periodic-snapshot history of gold.cart_recovery_signal, one row per "
+        "cart_id per run. See docs/metric-glossary.md 'History tables'."
+    ),
+    columns={
+        **TABLE_DOC.columns,
+        "_snapshot_at": "Timestamp of the run this row is a point-in-time copy of.",
+    },
+)
 
 
 def aggregate_carts(events: DataFrame) -> DataFrame:
@@ -162,13 +208,22 @@ def main():
     cart_agg = aggregate_carts(events)
     abandoned = filter_abandoned(cart_agg)
     scored = score_carts(abandoned, orders)
+    assert_unique(scored, GRAIN, context="gold.cart_recovery_signal")
 
     target_table = cfg.table("gold", "cart_recovery_signal")
     scored.write.format("delta").mode("overwrite").option(
         "overwriteSchema", "true"
     ).saveAsTable(target_table)
+    apply_table_doc(spark, target_table, TABLE_DOC)
 
     row_count = scored.count()
+
+    history_table = cfg.table("gold", "cart_recovery_signal_history")
+    scored.withColumn("_snapshot_at", F.col("_gold_computed_at")).write.format(
+        "delta"
+    ).mode("append").option("mergeSchema", "true").saveAsTable(history_table)
+    apply_table_doc(spark, history_table, HISTORY_TABLE_DOC)
+
     log_run(
         spark,
         cfg,

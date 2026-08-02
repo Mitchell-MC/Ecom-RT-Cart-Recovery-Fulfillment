@@ -1,0 +1,8 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/fabric/item/report/definition/page/1.4.0/schema.json",
+  "name": "b228445022c644bfa8b0",
+  "displayName": "Fulfillment Risk Ops",
+  "displayOption": "FitToPage",
+  "height": 720,
+  "width": 1280
+}

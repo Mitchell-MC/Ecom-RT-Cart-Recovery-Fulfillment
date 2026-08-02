@@ -2,12 +2,15 @@
 exec summary page reads from (see bi/powerbi/data-model.md). Scheduled daily at 06:00 UTC per
 docs/project-charter.md.
 
-`recoverable_revenue` and `delayed_order_revenue_risk` are captures of the *current* gold signal
-snapshots (gold.cart_recovery_signal / gold.fulfillment_risk_signal are overwritten in place each
-run, not historical) -- this job is what turns those snapshots into a trend line by recording one
-point per day. `on_time_delivery_rate` and `conversion_lag_median_minutes` are computed directly
-from silver over a trailing 30-day window, so they're accurate for the day regardless of when
-this job runs relative to the snapshot jobs.
+`recoverable_revenue` and `delayed_order_revenue_risk` are read from
+gold.cart_recovery_signal_history / gold.fulfillment_risk_signal_history -- the insert-only,
+one-row-per-run history tables written by gold_cart_recovery.py / gold_fulfillment_risk.py --
+using each metric's latest snapshot as of this job's run time. That makes both metrics correct
+regardless of when this job runs relative to the (differently-cadenced, hourly/4h) signal jobs,
+without a hard cross-job dependency: no risk of reading a stale-until-overwritten current-snapshot
+table, and a real historical record survives even if this daily job itself never ran on a given
+day. `on_time_delivery_rate` and `conversion_lag_median_minutes` are computed directly from
+silver over a trailing 30-day window, so they were already immune to this issue.
 """
 
 from __future__ import annotations
@@ -31,22 +34,25 @@ RISK_ACTION_THRESHOLD = 60
 TRAILING_WINDOW_DAYS = 30
 
 
-def recoverable_revenue(cart_recovery_signal: DataFrame) -> float:
+def _latest_snapshot(history: DataFrame) -> DataFrame:
+    latest_run = history.agg(F.max("_snapshot_at").alias("t")).collect()[0]["t"]
+    return history.filter(F.col("_snapshot_at") == F.lit(latest_run))
+
+
+def recoverable_revenue(cart_recovery_signal_history: DataFrame) -> float:
     row = (
-        cart_recovery_signal.filter(
-            F.col("priority_score") >= PRIORITY_ACTION_THRESHOLD
-        )
+        _latest_snapshot(cart_recovery_signal_history)
+        .filter(F.col("priority_score") >= PRIORITY_ACTION_THRESHOLD)
         .agg(F.sum("recoverable_cart_value").alias("total"))
         .collect()[0]
     )
     return row["total"] or 0.0
 
 
-def delayed_order_revenue_risk(fulfillment_risk_signal: DataFrame) -> float:
+def delayed_order_revenue_risk(fulfillment_risk_signal_history: DataFrame) -> float:
     row = (
-        fulfillment_risk_signal.filter(
-            F.col("fulfillment_risk_score") >= RISK_ACTION_THRESHOLD
-        )
+        _latest_snapshot(fulfillment_risk_signal_history)
+        .filter(F.col("fulfillment_risk_score") >= RISK_ACTION_THRESHOLD)
         .agg(F.sum("order_total_usd").alias("total"))
         .collect()[0]
     )
@@ -128,18 +134,20 @@ def main():
     dbutils = DBUtils(spark)
     cfg = get_config(dbutils)
 
-    cart_recovery_signal = spark.read.table(cfg.table("gold", "cart_recovery_signal"))
-    fulfillment_risk_signal = spark.read.table(
-        cfg.table("gold", "fulfillment_risk_signal")
+    cart_recovery_signal_history = spark.read.table(
+        cfg.table("gold", "cart_recovery_signal_history")
+    )
+    fulfillment_risk_signal_history = spark.read.table(
+        cfg.table("gold", "fulfillment_risk_signal_history")
     )
     shipments = spark.read.table(cfg.table("silver", "shipments"))
     clickstream_events = spark.read.table(cfg.table("silver", "clickstream_events"))
 
     metrics = {
         "metric_date": datetime.now(timezone.utc).date().isoformat(),
-        "recoverable_revenue": recoverable_revenue(cart_recovery_signal),
+        "recoverable_revenue": recoverable_revenue(cart_recovery_signal_history),
         "delayed_order_revenue_risk": delayed_order_revenue_risk(
-            fulfillment_risk_signal
+            fulfillment_risk_signal_history
         ),
         "on_time_delivery_rate": on_time_delivery_rate(shipments),
         "conversion_lag_median_minutes": conversion_lag_median_minutes(

@@ -70,9 +70,10 @@ Full write-up: [docs/architecture.md](docs/architecture.md). Distributed-compute
 ## Repo layout
 
 ```
-docs/                   Charter, metric glossary, architecture, tradeoffs, demo scripts
+docs/                   Charter, metric glossary, architecture, tradeoffs
 infra/terraform/        Modules + dev/staging environments (Azure Databricks + Unity Catalog)
 data_generation/        Synthetic clickstream + order-domain data generators
+src/common/             Shared env/catalog config, audit logging, Unity Catalog table docs
 src/ingestion/          Bronze layer: Structured Streaming (clickstream) + batch (order domain)
 src/transform/silver/   Standardization, dedup, keying
 src/transform/gold/     Cart-recovery signal, fulfillment-risk signal, exec summary marts
@@ -82,6 +83,7 @@ orchestration/airflow/     Stretch: Airflow DAG mirroring the same pipeline
 .github/workflows/      CI (lint/test), deploy-dev, promote-staging
 tests/                  Unit tests for silver/gold logic and DQ checks
 bi/powerbi/             Data model, DAX measures, and report layout for the ROI dashboard
+bi/local_preview/       Local (no-Databricks) CSV preview of the gold layer for BI iteration
 ```
 
 ## Status
@@ -116,8 +118,36 @@ databricks bundle run -t dev main_pipeline
 # 4. Point Power BI at the gold schema per bi/powerbi/data-model.md
 ```
 
-## Talking points
+## Data model roadmap
 
-If you're using this repo for interviews, start with
-[docs/star-talking-points.md](docs/star-talking-points.md) and the two demo scripts in `docs/`
-(10-minute and 30-minute variants).
+The gold layer follows Kimball dimensional modeling (fact tables at a declared grain, see
+[docs/metric-glossary.md](docs/metric-glossary.md)) with one deliberate addition: `cart_recovery_
+signal` and `fulfillment_risk_signal` are current-snapshot tables (overwritten each run, for the
+DirectQuery ops consumers in [bi/powerbi/data-model.md](bi/powerbi/data-model.md)), and each also
+writes an insert-only `*_history` table (periodic snapshot fact) so `gold_exec_summary_marts.py`
+can read real history instead of depending on job-scheduling timing — see
+[docs/metric-glossary.md#history-tables-periodic-snapshot-fact-pattern](docs/metric-glossary.md#history-tables-periodic-snapshot-fact-pattern).
+
+Two things are intentionally **not** built yet, deferred per this repo's YAGNI principle rather
+than overlooked:
+
+- **Conformed dimensions.** `customer_id`, `carrier`, and `sku` are repeated as bare columns
+  across silver and both gold signal tables — there's no `dim_customer`/`dim_carrier` table. At
+  today's scale (two gold fact tables, one BI report) that duplication is cheap and a real
+  dimension table would be unused ceremony. The trigger to build one: a third gold mart needs the
+  same customer/carrier attributes, or Power BI needs to slice across `cart_recovery_signal` and
+  `fulfillment_risk_signal` on more than `customer_id`. At that point add `dim_customer` (SCD
+  Type 2, since a customer's segment/loyalty tier changes over time and historical reports should
+  reflect the segment *at the time*, not today's) and `dim_carrier`, and relate both gold facts to
+  them the way `silver.customers` is already related in `bi/powerbi/data-model.md`.
+- **Data Vault.** The `*_history` tables above are periodic snapshot facts (full row copy per
+  run), not Data Vault satellites (which track only changed attributes, keyed off hashed business
+  keys via hubs/links). That's the right call today — nothing here has a regulatory audit
+  requirement, and there are only two source-of-truth signal tables, not the many independently-
+  changing source systems Data Vault is built to integrate (see the article-derived rationale:
+  Data Vault earns its complexity when an auditor/regulator will ask you to prove a change
+  history, or when you're integrating many heterogeneous sources — neither is true here). If this
+  platform grows into ingesting from several independent OMS/CRM/fraud systems with regulatory
+  reporting requirements, that's the trigger to introduce hubs (business keys: `customer_id`,
+  `order_id`, `cart_id`), links (e.g. cart-to-order), and satellites (the scored attributes,
+  insert-only) rather than growing the current snapshot-table pattern further.

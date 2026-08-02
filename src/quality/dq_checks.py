@@ -34,6 +34,12 @@ def non_negative(col: str) -> Column:
     return F.col(col).isNotNull() & (F.col(col) < 0)
 
 
+def not_in(col: str, allowed: list[str]) -> Column:
+    """Flags rows where `col` is a value outside `allowed`. Nulls never trigger this rule --
+    pair it with `not_null` separately if the column is also required."""
+    return F.col(col).isNotNull() & ~F.col(col).isin(allowed)
+
+
 def within_clock_skew(col: str, past_days: int = 1, future_minutes: int = 5) -> Column:
     too_old = F.col(col) < F.expr(f"current_timestamp() - INTERVAL {past_days} DAYS")
     too_new = F.col(col) > F.expr(
@@ -90,6 +96,18 @@ def dedupe_last_write_wins(
         .filter(F.col("_dq_row_num") == 1)
         .drop("_dq_row_num")
     )
+
+
+def assert_unique(df: DataFrame, key_cols: list[str], *, context: str) -> None:
+    """Fails fast if `df` has more than one row per `key_cols` -- the grain contract documented
+    in docs/metric-glossary.md. Catches an upstream duplicate (e.g. a join fan-out from a source
+    that unexpectedly has a duplicated key) before it ships as a silently-wrong gold table.
+    """
+    dupes = df.groupBy(*key_cols).count().filter(F.col("count") > 1)
+    if dupes.head(1):
+        raise ValueError(
+            f"{context}: expected one row per {key_cols}, found duplicate keys"
+        )
 
 
 def write_quarantine(quarantine_df: DataFrame, target_table: str) -> None:

@@ -1,0 +1,42 @@
+table silver_customers
+	lineageTag: eec2c75a-5f86-41a1-9f8f-c1179837ca81
+
+
+	column customer_id
+		dataType: string
+		lineageTag: f9086ed3-8f57-420e-8c0a-ea3da9e06bf0
+		summarizeBy: none
+		sourceColumn: customer_id
+
+	column first_seen_date
+		dataType: dateTime
+		formatString: Short Date
+		lineageTag: 80d7dfb8-aafc-4bc5-9669-4839cace7090
+		summarizeBy: none
+		sourceColumn: first_seen_date
+
+		annotation UnderlyingDateTimeDataType = Date
+
+	column is_returning
+		dataType: boolean
+		lineageTag: 54a586a4-ae2f-4abb-b692-f19b331102af
+		summarizeBy: none
+		sourceColumn: is_returning
+
+	column home_tz_offset
+		dataType: int64
+		formatString: 0
+		lineageTag: 638d8764-f41d-4d24-bf5c-69a0f56f90a0
+		summarizeBy: none
+		sourceColumn: home_tz_offset
+
+	partition silver_customers = m
+		mode: import
+		source = ```
+				let
+				    Source = Csv.Document(File.Contents(GoldPreviewFolder & "\silver_customers.csv"), [Delimiter=",", Columns=4, Encoding=65001, QuoteStyle=QuoteStyle.None]),
+				    #"Promoted Headers" = Table.PromoteHeaders(Source, [PromoteAllScalars=true]),
+				    #"Changed Type" = Table.TransformColumnTypes(#"Promoted Headers", {{"customer_id", type text}, {"first_seen_date", type date}, {"is_returning", type logical}, {"home_tz_offset", Int64.Type}})
+				in
+				    #"Changed Type"
+				```

@@ -1,0 +1,11 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/fabric/gitIntegration/platformProperties/2.0.0/schema.json",
+  "metadata": {
+    "type": "SemanticModel",
+    "displayName": "EcomSignalPlatform"
+  },
+  "config": {
+    "version": "2.0",
+    "logicalId": "db5eff56-1fc9-4676-b566-764e13e0c553"
+  }
+}

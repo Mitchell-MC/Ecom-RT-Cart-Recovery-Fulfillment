@@ -26,12 +26,20 @@ pytestmark = pytest.mark.integration
 _SCHEMA = (
     "event_id string, event_type string, event_timestamp timestamp, "
     "session_id string, customer_id string, cart_id string, device_type string, "
-    "producer_ingested_at timestamp, sku string, quantity int, price_at_event double"
+    "producer_ingested_at timestamp, page_type string, sku string, quantity int, "
+    "price_at_event double"
 )
 
 
 def _event(
-    event_id, event_type, session_id, customer_id, cart_id, price=None, qty=None
+    event_id,
+    event_type,
+    session_id,
+    customer_id,
+    cart_id,
+    price=None,
+    qty=None,
+    page_type=None,
 ):
     now = datetime.now(timezone.utc)
     return (
@@ -43,6 +51,7 @@ def _event(
         cart_id,
         "mobile",
         now,
+        page_type,
         None,
         qty,
         price,

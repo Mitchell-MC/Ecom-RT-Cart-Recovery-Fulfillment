@@ -1,0 +1,17 @@
+table dim_date
+	lineageTag: 793cd390-d150-4b57-824c-ab9a92a1087f
+
+	column Date
+		dataType: dateTime
+		formatString: Short Date
+		lineageTag: 2b81e517-75fa-4c6b-b77f-a8c64d0bf803
+		summarizeBy: none
+		sourceColumn: Date
+
+		annotation UnderlyingDateTimeDataType = Date
+
+	partition dim_date = calculated
+		mode: import
+		source = ```
+				CALENDAR ( DATE ( 2024, 1, 1 ), TODAY () )
+				```

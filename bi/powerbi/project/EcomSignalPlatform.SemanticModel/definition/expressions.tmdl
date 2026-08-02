@@ -1,0 +1,9 @@
+expression GoldPreviewFolder =
+		"c:\Users\mccal\Downloads\Ecom-RT-Cart-Recovery-Fulfillment\bi\local_preview\output" meta [
+			IsParameterQuery = true,
+			Type = "Text",
+			IsParameterQueryRequired = true
+		]
+	lineageTag: 230421f5-113b-4737-9a78-accc4071908a
+
+	annotation PBI_ResultType = Text

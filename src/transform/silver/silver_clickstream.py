@@ -27,6 +27,7 @@ from dq_checks import (  # noqa: E402
     DQRule,
     apply_dq_rules,
     dedupe_last_write_wins,
+    not_in,
     within_clock_skew,
     write_quarantine,
 )
@@ -37,6 +38,9 @@ CART_EVENT_TYPES = [
     "checkout_start",
     "checkout_complete",
 ]
+ALLOWED_EVENT_TYPES = ["page_view", *CART_EVENT_TYPES]
+ALLOWED_DEVICE_TYPES = ["desktop", "mobile", "tablet"]
+ALLOWED_PAGE_TYPES = ["home", "category", "product", "cart", "checkout"]
 
 
 def build_dq_rules() -> list[DQRule]:
@@ -57,6 +61,17 @@ def build_dq_rules() -> list[DQRule]:
             price_required
             & (F.col("price_at_event").isNull() | (F.col("price_at_event") < 0)),
         ),
+        DQRule(
+            "unexpected_event_type", "warn", not_in("event_type", ALLOWED_EVENT_TYPES)
+        ),
+        DQRule(
+            "unexpected_device_type",
+            "warn",
+            not_in("device_type", ALLOWED_DEVICE_TYPES),
+        ),
+        # page_type is only populated for page_view events (see generate_clickstream.py); it's
+        # null for every other event_type, and not_in() never fires on null.
+        DQRule("unexpected_page_type", "warn", not_in("page_type", ALLOWED_PAGE_TYPES)),
     ]
 
 
